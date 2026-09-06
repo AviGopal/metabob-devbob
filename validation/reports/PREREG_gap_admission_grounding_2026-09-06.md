@@ -819,3 +819,66 @@ The 3-failure difference is flake in my favour and is **not** claimed as an impr
 classifier and I did not work around it.** The change is verified and recorded but not live:
 origin/dev does not have it, the runtime does not have it, and the defect remains active. Landing it
 needs operator approval for the push.
+
+---
+
+# Addendum 13: fix 1 landed too — and my first reading of its effect was wrong
+
+## Fix 1 is live
+
+While I was working the apply-path repair, the lane landed the grading change:
+
+```
+459bb09 Substrate Autonomous 14:16
+  substrate-authored: apply route-edit-caf3d5c0-compose-report via mitosis cutover
+```
+
+Runtime line 6253 now reads:
+
+```ts
+        success: verdict === "FAVORABLE" && landedVessels.length > 0,
+```
+
+Attributed by `git log -S` on the symbol. Deployed: `development-vessel` MainPID started
+**15:59:46 UTC**. So **bootstrap step "grade on landing" is in the runtime** — the compose grade now
+requires landing evidence, not a clean gate verdict.
+
+Note it landed under gap `route-edit-caf3d5c0`, not under the gap id I filed it as. The change is
+identical and the symbol attribution is unambiguous, but the gap→commit link is not the one I
+authored, which is worth remembering before treating gap ids as provenance.
+
+## RETRACTION: the effect I measured was not the effect
+
+I first split the day's grades at the **commit** time (14:16) and reported the success rate falling
+9.6% → 3.3%, in the predicted direction.
+
+**That was wrong.** Splitting at the **deployment** time instead:
+
+| split at process start 15:59:46 | rows | success | rate |
+|---|---|---|---|
+| before | 186 | 16 | 8.6% |
+| after | **0** | 0 | — |
+
+The latest graded row in the store is `15:59:42.888`; the process carrying the change started at
+`15:59:46`. **Not one compose has been graded by the new code.** Every row I had placed in the
+"after" bucket was still graded by the old binary, so the 9.6% → 3.3% movement was pre-change noise
+and is retracted.
+
+This is the same error class as this morning's step-1 retraction, in a new costume: attributing an
+effect to a change before the consuming layer actually had it. **A commit is not a deployment**, and
+the split point for any before/after must be the process start time, not the commit timestamp.
+
+Caught within minutes only because the deployment check (`ExecMainStartTimestamp`) was run at all.
+Had I published the 3.3% figure, it would have been a fabricated confirmation of my own prediction —
+the most dangerous kind, because it pointed the way I expected.
+
+## Honest status of both fixes
+
+| | landed | deployed | consequence observed |
+|---|---|---|---|
+| fix 0 — environment label | `9822a8e` 13:07 | yes | **no** — no unanswered verify has occurred since |
+| fix 1 — grade on landing | `459bb09` 14:16 | 15:59:46 | **no** — zero graded rows since deployment |
+
+Both are live. Neither has yet been shown to do anything. The predictions are on record and
+falsifiable: fix 0 predicts an environmental refusal that leaves `failed_attempts` unchanged; fix 1
+predicts the measured `feature_compose` success rate falls, since most composes do not land.
