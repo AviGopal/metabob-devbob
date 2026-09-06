@@ -278,13 +278,19 @@ actually works. It works harder than I credited — observed shedding **22 of 22
 failures on a re-run, so the suite emits roughly that many per run under load and the control
 correctly discards them.
 
-But every observed `FLAKE CONFIRMATION` line, over three days and ~200 occurrences, ends the same
+But every observed `FLAKE CONFIRMATION` line ends the same
 way: `(pass 2188 -> null)`, `(pass 1341 -> null)`, `(pass 2041 -> null)` — **the second run's pass
 count never parses.** Not once.
 
-Both runs issue the identical command (`timeout 240 bun test --timeout 20000 2>&1`), and the
-*first* run parses fine, so this is not a parser bug: the re-run is being killed at its 240 s cap.
-The consequence is structural:
+Widened to seven days: **325 occurrences, 0 with a parseable second-run pass count.** Unanimous,
+no exceptions.
+
+Both runs issue the identical command (`timeout 240 bun test --timeout 20000 2>&1`) and the *first*
+run parses fine, so this is not a parser bug. **I initially wrote that the re-run is killed at its
+240 s cap; the 325/0 unanimity argues against that** — a load-dependent kill would let some
+quiet-period run through. The cause is not established. Candidates: a shorter tool-level timeout on
+the second `callTool` than on the first, or the summary never reaching the captured stream on that
+path. What is established is the effect, and the effect is structural:
 
 ```ts
 if (passRegressed && basePass !== undefined && curPass2 !== null && curPass2 >= basePass)
