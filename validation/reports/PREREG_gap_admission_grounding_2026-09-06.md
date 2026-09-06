@@ -314,3 +314,50 @@ parse a re-run the load already killed.
 **Not filed as a fourth gap**, deliberately and for the same reason as the `runner_up` finding: the
 lane holds one slot, load is 23, and three grounded gaps are already queued and unserved. Adding a
 competitor now costs more than it buys. It is next in line if fix 0 lands.
+
+---
+
+# Addendum 4: I was reading the wrong loadavg all session — and it makes fix 0 sharper
+
+Every load figure in this report and in the session that produced it (`~16`, `~20`, `~29`) came
+from the **host's** `uptime`. The substrate does not run on the host. It runs in a qemu VM
+(Docker Desktop), and reads its own `/proc/loadavg`:
+
+| layer | load | cores | ratio |
+|---|---|---|---|
+| host `uptime` | 28.42 | 16 | 1.78 |
+| **substrate `/proc/loadavg`** | **16.88** | **14** | **1.21** |
+
+The host figure is inflated by things the substrate has nothing to do with — Firefox, the Claude
+processes, and a `wf-recorder` screen capture that has been running for **4 days at ~142% CPU**.
+
+This is my own most-repeated error class, again: **verify at the layer that consumes the artifact.**
+The consuming layer for a 20-second test budget is the VM's scheduler, not the host's. My standing
+rule ("never judge a fix at loadavg > ~10") was written about the host and I applied it to the
+substrate without re-deriving it.
+
+**Nothing measured is invalidated.** The corpus result (74/454 vs 1005/2551, OR 3.34) is keyed on
+the *presence of a timeout*, not on any load reading. The instance (20005.79 ms against a 20000 ms
+budget) is a fact about the test run. What changes is the attribution, and it changes for the
+better.
+
+## The calibration band
+
+`system-load.ts` already has a saturation guard:
+
+```ts
+export const SATURATION_MULTIPLE = 3;
+return load > cpuCount * SATURATION_MULTIPLE;   // fires above 42 on this box
+```
+
+The observed timeout happened at **16.88**. So there is a band — roughly **1.2× to 3.0× cores** —
+where the box is loaded enough to blow a 20-second test budget but *not* loaded enough for the
+system to consider itself busy at all. Every false refusal measured here lives inside it.
+
+That explains why an existing guard doesn't prevent this, and it argues specifically **against**
+"raise the threshold" as the repair: the guard is answering a different question (should I start
+heavy work?) from the one that matters here (can I trust a 20-second budget right now?). Labeling
+the failure as `environment`, so the already-built exemption applies, remains the correct fix.
+
+The gap record has been corrected in place — the wrong figure replaced in the evidence section, the
+retraction and this band analysis appended, anchor and op verified intact afterward.
