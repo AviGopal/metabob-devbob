@@ -237,3 +237,45 @@ apply response:
 ```
 
 Every touched row is restorable by `id` to its exact pre-write value.
+
+## Rate adjudication (06:30 UTC, host loadavg 9.99 — the first time it dropped below the floor)
+
+Baseline = the 24 h before cutover; post = cutover (04:28:23) → 06:30, i.e. **2.03 h**. Rates are
+per hour.
+
+| metric | baseline/h | post/h | ratio |
+|---|---|---|---|
+| rebind calls | 19.42 | 22.69 | 1.17× |
+| shape-mismatch refusals | 58.25 | 67.10 | 1.15× |
+| shape_signature events | 2.12 | 5.43 | 2.55× |
+
+### Verdict against the pre-registered predictions
+
+1. **Donors 1,539 → 3,183 — MET** (3,186). Structural, and already confirmed.
+2. **shape-mismatch share falls — NOT MET.** Per rebind call: **3.00 → 2.96**. Unchanged.
+3. **shape_signature matches rise — NOT MET once self-caused events are removed.** The raw 2.55×
+   is an artifact of my own dispatches. Attributing the 11 post-cutover events by timestamp against
+   my dispatch log leaves **2 organic** (05:44:02, 06:06:02); the other 9 fall on operator goals.
+   Organic rate **0.99/h against a 2.12/h baseline — 0.46×**, i.e. no rise.
+4. **Tier-2 `selected=true` > 0 — MET ONLY BY MY OWN GOAL.** The single occurrence is goal B, which
+   I dispatched specifically to force it. **Organic `selected=true` remains 0.**
+
+**So (1) holds and (2)–(4) do not, which is exactly the case written down in advance: the index was
+not the binding constraint.** Making 1,644 pathways addressable was necessary — they are provably
+borrowed, and the counterfactual for that is recorded — but it was not sufficient, and it did not
+move the reuse rate.
+
+### Why this verdict is weaker than it looks, stated plainly
+
+- **n is tiny.** 11 shape_signature events post-cutover, **2 of them organic**. Poisson error on
+  n=2 is enormous; "0.46×" is not a reliable point estimate and is entirely consistent with no
+  change in either direction. The defensible claim is **"no detectable increase"**, not "a decrease".
+- **2.03 h against a 24 h baseline**, in a single stretch at elevated load. Time-of-day and load
+  confounds are uncontrolled.
+- **Attribution is judgment, not a tag.** I separated mine from organic by comparing timestamps to
+  my own dispatch log. Ironically, the fix landed later this same window (`ablation`/`learning_mode`
+  tags now persisting) is the beginning of the machinery that would make this attribution mechanical
+  instead of manual.
+
+The 72 h horizon in the original pre-registration therefore still stands; this is an early read at
+2 h, not its replacement.
