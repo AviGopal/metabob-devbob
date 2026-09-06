@@ -206,16 +206,25 @@ running the detector. Filed as `a-clean-legibility-scan-leaves-no-trace`.
 returns "obsidian-vessel unreachable or ui_view empty" — a wrong-key error that
 reads as a dead surface.)
 
-**Working on an interface gap hides it from the interface.** A natural control
-appeared: two gaps filed minutes apart, both `category: ui_legibility`, both
-citing `repos/human-surface-vessel/src/store.ts`. The one the substrate did *not*
-compose on is still `ui_legibility` and renders in the panel. The one it *did*
-compose on — the hydration defect — is now stored as `edit_intent_route` and is
-therefore **invisible on the surface it is about**. Consistent with
-`substrateGap_write` replacing rather than merging: the compose lane rewrites the
-record and its own category wins. The more attention the substrate pays an
-interface defect, the less a human can see that it is known. Filed as
-`working-on-an-interface-gap-hides-it-from-the-interface`.
+**Working on an interface gap hides it from the interface.** A natural
+experiment emerged, n=4, every gap filed as `category: ui_legibility`:
+
+| Composed on? | Gap | Stored category | In panel? |
+|---|---|---|---|
+| yes | `feedback-hydration-will-flood-…` | `edit_intent_route` | no |
+| yes | `a-clean-legibility-scan-leaves-no-trace` | `operations` | no |
+| no | `surface-self-knowledge-panel-reads-a-volatile-store` | `ui_legibility` | yes |
+| no | the two audit gaps below | `ui_legibility` | yes |
+
+Both gaps a lane touched were reclassified and vanished from the panel; both it
+had not kept their category and render. The two target categories differ, so this
+is not one hardcoded value — what is common is that a lane wrote the record and
+its own classification won, consistent with `substrateGap_write` replacing rather
+than merging.
+
+**Pre-registered falsifier:** if the two audit gaps are still `ui_legibility` and
+still rendering after a compose lane picks them up, this claim is wrong and should
+be retracted. Filed as `working-on-an-interface-gap-hides-it-from-the-interface`.
 
 That last one is the horizon in miniature. To get a gap *closed* it must cite a
 file and enter the file-shaped lane; entering that lane strips the category that
