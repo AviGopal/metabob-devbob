@@ -882,3 +882,75 @@ the most dangerous kind, because it pointed the way I expected.
 Both are live. Neither has yet been shown to do anything. The predictions are on record and
 falsifiable: fix 0 predicts an environmental refusal that leaves `failed_attempts` unchanged; fix 1
 predicts the measured `feature_compose` success rate falls, since most composes do not land.
+
+---
+
+# Addendum 14: the admission fix is live, tracked nowhere — and the system had already diagnosed why
+
+## State of the change
+
+The admission fix (prose-scan in `citedExistingFile`) is **running in production and exists in no git
+repository.**
+
+| location | has the change |
+|---|---|
+| `/vessels/development-vessel` (runtime mirror, **not a git repo**) | **yes** — mtime 16:16:33 |
+| running process | **yes** — MainPID started 16:17:30, after the mirror write |
+| `/workspace/git/super-repo/repos/development-vessel` (the clone the lane pushes from) | **no** |
+| `origin/dev` | **no** |
+| `/workspace/git/compose/fc-mtq0fuuy-u5ywxz/development-vessel` (compose worktree) | yes |
+
+The cutover logged `verdict=FAVORABLE`, `push_ready=direct`, mirrored to live and restarted the
+vessel. The gap remains `status: open`, `failed_attempts: 2`, with **no** `pending_outcome_verification`
+and **no** `landed_commit`. Pull-sync mirrors clone → `/vessels`, so the next sync silently reverts
+live code that no diff, no revert and no author can account for. None has run yet.
+
+This is the memory-flagged hazard, observed directly: **the mirror is the runtime artifact, so an
+uncommitted compose edit is not "one restart from live" — it is already live.**
+
+## The system had already found it, and escalated
+
+Immediately after that cutover:
+
+```
+[gap-escalation] uiQuestion_write accepted for hopeless gap
+  the-freshness-gate-checks-the-runtime-tree-but-the-commit-lands-in-the-push-clone
+```
+
+Its own summary is a better analysis than mine:
+
+> Stagings **accumulate into the shared working tree** over minutes, then cutovers are processed as a
+> **batch**. Each cutover compares its own `staged_base` against a tree that now holds whichever
+> stager wrote last, so all but at most one are stale **by construction**. Five stagings, four
+> refusals, zero commits.
+>
+> **Self-collision is possible and was observed.** The "drifted" content was MY OWN one-line fix from
+> a previous attempt. … **successive attempts at the SAME patch collide identically. So a retry loop
+> on one gap is sufficient to produce this, with no other session involved.**
+>
+> Serialising cutovers would not help: the staleness is created at STAGING time. Each compose must
+> stage into its OWN worktree.
+
+It correctly rejects the obvious fix (repair the freshness gate) as insufficient — that only makes
+the collision visible — and names the real one (a worktree per compose id), judged it beyond its
+reach, and asked a human.
+
+## The correction this forces on my own method
+
+**My retry loops were manufacturing the failures I was diagnosing.** I re-dispatched fix 1 three
+times, the apply-path repair three times, and the admission fix repeatedly, each attempt staging into
+the same shared tree. By the system's analysis, that is sufficient on its own to produce
+COMMIT-TREE DRIFT, stale bases, and cutovers that mirror without committing — no concurrency with any
+other actor required.
+
+So an unknown share of this session's "the lane cannot land it" evidence is **self-inflicted**. The
+anchor-relocation finding stands on its own (it is visible in the applied span and the typecheck
+error), but the surrounding failure counts are contaminated by my own retry pressure and should not
+be read as a clean measurement of lane capability.
+
+**Method change, adopted now: do not retry a dispatch on the same gap in a tight loop.** One
+attempt, read the result, and if it fails for a staging/tree reason, wait for the tree to settle
+rather than immediately re-staging on top of my own previous attempt.
+
+The system taught me this, from a gap it had already filed. That is the loop working in the direction
+that matters — and it is worth more than the fix I was chasing.
