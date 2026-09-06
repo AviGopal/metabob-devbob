@@ -701,3 +701,62 @@ line of work exists to enforce — a change that typechecks and passes its gates
 that does something. It will be settled by the first environmental refusal in the wild leaving
 `failed_attempts` unchanged; a snapshot of that counter across 2,908 gaps is stored and the watcher
 is re-armed.
+
+---
+
+# Addendum 11: the verbosity result replicated — and anchor repair defeated a unique anchor
+
+## Replication
+
+Fix 1 (`compose-grades-…`, a different gap on a different target) was rewritten to the same
+1,283-character single-anchor template. **`op_count = 1`.** The verbosity finding is now a
+replication rather than a single before/after: 5,623 chars → 3 ops; 1,320 chars → 1 op (landed);
+1,283 chars on a different target → 1 op.
+
+## But it was refused, and the reason is worse than a refusal
+
+```
+applied = [{path: '…feature-compose.ts', ok: true, "repaired": true,
+            span: {start_line: 6341, end_line: 6341}}]
+verify  = exit 2
+  src/resolvers/feature-compose.ts(6341,47): error TS2304: Cannot find name 'landedVessels'.
+```
+
+The anchor was at **6253**, exact and unique:
+
+```ts
+        success: verdict === "FAVORABLE",          // 6253 — the compose GRADE
+```
+
+The edit landed at **6341**:
+
+```ts
+      ok: effectiveVerdict === "FAVORABLE",        // 6341 — the report's OK FIELD
+```
+
+`"repaired": true` means the apply did not find its anchor and **relocated the edit**. It
+fuzzy-matched on the shared tail `=== "FAVORABLE",` and rewrote a semantically different statement,
+in a different scope, in a different object.
+
+**The anchor discipline this session has leaned on does not protect against this.** Uniqueness was
+verified — `grep -n` returns exactly one match in the runtime file. Uniqueness is not the property
+that matters when the matcher is allowed to relocate on failure.
+
+## Why this is a near-miss, not just a failed attempt
+
+The typecheck caught it **by luck of scope**: `landedVessels` is declared at 6245 inside the
+emission block and is not visible at 6341, so `TS2304` fired. Had the relocated target happened to
+sit where the identifier *was* in scope, the edit would have typechecked, passed shape-dispatch,
+passed tests (nothing asserts on that field), and silently changed the report's `ok` field — the
+field that determines what the compose reports about itself.
+
+That is the partial/misapplied-edit class, which a diff-reading judge catches least, landing on the
+one field whose corruption would make every subsequent compose report unreliable. The gate that
+saved it was a scope accident.
+
+## Status
+
+Fix 1 remains open and unlanded. The op is correct; the apply path moved it. I am not re-dispatching
+it unchanged — the same relocation would recur — and I am not hand-landing it. The next step is to
+determine whether the repair path can be made to refuse rather than relocate when an exact anchor is
+present in the file, which is a defect in the apply mechanism rather than in this gap.
