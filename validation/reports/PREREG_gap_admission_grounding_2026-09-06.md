@@ -576,3 +576,73 @@ paragraph is wrong.
 
 This also gives the standing division of labour a sharper edge than "operator supplies verbatim
 anchors": **the operator supplies exactly one anchor and nothing else that looks like code.**
+
+---
+
+# Addendum 9: fix 0 landed, and the prediction held
+
+## The prediction
+
+Recorded before the result: *cutting the summary from 5,623 to 1,320 characters returns `op_count`
+to 1.* 
+
+**Confirmed.** `git show --stat 9822a8e`:
+
+```
+ src/resolvers/feature-compose.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+```
+
+One file, one line. The same gap, same anchor, same target, same composer — only the record's
+verbosity changed, and `op_count` went 3 → 1. **Gap verbosity is a causal input to apply drift.**
+The instruction/evidence split belongs in the gap store as structure, not in operator discipline.
+
+## The landing, verified at every layer
+
+| check | result |
+|---|---|
+| landed diff | `1 file changed, 1 insertion(+), 1 deletion(-)` |
+| byte-comparison of the landed line to the spec | **exact match** |
+| pushed to remote | `9822a8e` on `origin/dev` |
+| attribution method | `git log -S '<symbol>'`, **not** `git log -- <path>` |
+| mirrored to runtime | present at `/vessels/development-vessel/…:6344` |
+| **deployed** | `ExecStart=bun /vessels/development-vessel/src/index.ts`, MainPID started **13:07:40**, after the 13:07 cutover |
+
+```
+9822a8e Substrate Autonomous 13:07
+  substrate-authored: apply a-load-induced-verify-timeout-is-charged-to-the-drafter-as-a-fix-failure-compose-report via mitosis cutover
+```
+
+Drafted, applied, typechecked, tested, semantically gated, committed, pushed, mirrored and restarted
+into — by the substrate. The operator supplied a gap record containing exactly one anchor and one
+replacement. **No operator hands on the code.**
+
+Note this vessel runs `src/` directly, so the mirror *is* the runtime artifact — unlike goal-host,
+which imports a package and loads `dist/`. The consuming layer differs per vessel; it was checked
+here rather than assumed.
+
+## What it took, honestly
+
+Seven attempts. The failure modes, in order, and none of the first five were about the change:
+
+1. excluded from admission entirely (`no_groundable_target` — no `edit_site`)
+2. verify never ran (`output: ''`, `exit_code: null`) — charged as a `fix` failure
+3. semantic gate refused on a false premise, though its underlying objection was fair
+4. `BUSY stage=capacity`, repeatedly — 82.5% of all picks
+5. dispatch killed mid-flight by an unrelated cutover of the vessel being dispatched to
+6. **my own evidence** inflating the op count to 3 and breaking the typecheck
+7. landed
+
+Two of those seven were the system's judgement improving the patch: the empty verify proved my
+timeout-string predicate too narrow, and the semantic gate's objection moved the edit to the call
+site where `verify` is a local rather than a closure read. **The final patch is better than the one
+I filed, and both improvements came from refusals.**
+
+## Still to verify: does it do anything?
+
+Landing is not working. The claim under test is that a compose whose verify does not answer now
+receives `failure_kind: "environment"` and is therefore **not** charged by `bumpFailedAttempts`.
+That requires observing the next environmental refusal in the wild — a `verify` with empty output
+or a null exit code, followed by a gap whose `failed_attempts` does **not** increment. Until that is
+observed, this is a landed change with an untested consequence, which is precisely the hollow-green
+class this whole line of work exists to close.
