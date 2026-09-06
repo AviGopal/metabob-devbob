@@ -646,3 +646,58 @@ That requires observing the next environmental refusal in the wild — a `verify
 or a null exit code, followed by a gap whose `failed_attempts` does **not** increment. Until that is
 observed, this is a landed change with an untested consequence, which is precisely the hollow-green
 class this whole line of work exists to close.
+
+---
+
+# Addendum 10: consequence, tested as far as execution allows
+
+No unanswered-verify compose occurred in the 50 minutes after landing — consistent with the
+mechanism itself, since environmental failures cluster at high load and load stayed low. Rather than
+wait idle, both ends of the chain were tested by **running the system's own code**, not by reading
+it.
+
+## End one — the deployed predicate, against real recorded failures
+
+The predicate was extracted **verbatim from the deployed file** (`sed -n 6344p` on
+`/vessels/…/feature-compose.ts`) rather than retyped, then run in the container's own `bun`:
+
+```js
+const PRED = (verify) => verify.some((vr) => !vr.ok && (vr.exit_code === null || !vr.output
+  || /timed out after \d+\s*ms/i.test(vr.output)));
+```
+
+| case | expected | got |
+|---|---|---|
+| 12:33 real recorded failure — verify never ran (`output:""`, `exit_code:null`) | fire | **fire** |
+| 11:58 real recorded failure — git test at 20005.79 ms | fire | **fire** |
+| negative control — genuine typecheck failure (`TS2322`, `exit_code:2`) | silent | **silent** |
+| negative control — genuine test failure (`1 fail`, real assertion) | silent | **silent** |
+| negative control — verify passed | silent | **silent** |
+
+The two positives are the *actual recorded verify objects* from this session's own refusals, not
+constructed examples. The three negatives are the cases where charging the drafter is correct.
+
+## End two — the real downstream consumer, executed
+
+`isNonAttemptComposeResult` is exported, so it was called directly rather than reimplemented:
+
+| input | expected | got |
+|---|---|---|
+| `{failure_kind:"environment"}` — what the fix now emits | exempt | **exempt** |
+| `{failure_kind:"fix"}` — a genuine refutation | charge | **charge** |
+| `{verdict:"BUSY",stage:"capacity"}` — pre-existing exemption | exempt | **exempt** |
+| `null` | charge | **charge** |
+
+## What remains unverified, stated narrowly
+
+The **middle link** has been read but not run: that a live compose actually writes
+`failure_kind:"environment"` into the body the caller receives as `lastBody`, and that line 3686 is
+the path taken for this failure mode. Both ends execute correctly; the join between them is a code
+read.
+
+So the honest status is: **predicate proven, consumer proven, wiring inferred.** That is stronger
+than "landed" and weaker than "works," and the difference is exactly the distinction this whole
+line of work exists to enforce — a change that typechecks and passes its gates is not yet a change
+that does something. It will be settled by the first environmental refusal in the wild leaving
+`failed_attempts` unchanged; a snapshot of that counter across 2,908 gaps is stored and the watcher
+is re-armed.
