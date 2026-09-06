@@ -760,3 +760,62 @@ Fix 1 remains open and unlanded. The op is correct; the apply path moved it. I a
 it unchanged — the same relocation would recur — and I am not hand-landing it. The next step is to
 determine whether the repair path can be made to refuse rather than relocate when an exact anchor is
 present in the file, which is a defect in the apply mechanism rather than in this gap.
+
+---
+
+# Addendum 12: the apply-path defect blocked its own repair three times
+
+The repair for the anchor-relocation defect was filed as a grounded single-op gap and dispatched
+three times. **Every failure was at the apply stage; none was on the merits of the change**, which is
+one line of prompt text.
+
+| # | how it was specified | outcome |
+|---|---|---|
+| 1 | anchored on the whole template literal | drafter could not reproduce backticks and `${}` verbatim; matched near line 1; `TS1109` |
+| 2 | replacement contained its own anchor | `old_string and new_string are identical — this op is a no-op` |
+| 3 | correctly specified, plain-prose anchor, old not a substring of new | `repaired: true`, relocated onto `if (dryRun) {` at line **4456**; `TS1109` at 4458, `TS1005` at 6377 |
+
+Attempts 1 and 3 failed **by the very defect the change repairs**. The blind-edit repair
+mislocalizes the fix for the blind-edit repair.
+
+## Two findings about the gap-authoring channel
+
+Both are operator-side, and both were invisible until they broke something:
+
+- **A verbatim anchor containing template-literal syntax is not safely quotable.** Backticks,
+  interpolations and escape sequences cannot be reproduced by the drafter, and the failure mode is
+  not "no match" — it is a match somewhere else. The anchor discipline that has worked all session
+  holds only for plain code lines.
+- **An insertion must not be expressed as "replace A with B" where B contains A.** The drafter
+  collapses it to a no-op. Make the old text strictly not a substring of the new text.
+
+## The intervention, and why it is not hand-completion
+
+Three attempts, two failing by the defect under repair, is the directive's *proven incapable*
+condition — narrowly: the lane cannot land this because its edit-application is the broken thing.
+Fixing it restores the lane's ability to land its own work. Leaving it would mean every future
+correctly-specified op is one scope-accident away from landing on the wrong statement.
+
+The change is one line of **prompt text** — no gate, no threshold, no control flow. It supplies
+`effOld`, already in scope, to a model that was being asked to re-find a target it was never shown.
+
+**Verified in an isolated worktree at container load ~4, against an origin/dev baseline run in the
+same worktree at the same load:**
+
+| check | result |
+|---|---|
+| `tsc --noEmit` | clean |
+| `shape-dispatch-check` | OK — 250 advertised, 253 dispatch, all agree |
+| diff vs origin/dev | 1 file, 1 insertion, 1 deletion |
+| tests with the change | 19 failures |
+| tests at baseline, same worktree and load | 22 failures |
+| **failures present with the change and absent at baseline** | **0** |
+
+The 3-failure difference is flake in my favour and is **not** claimed as an improvement.
+
+## Status: committed locally, NOT pushed
+
+`65c3a43` is committed on `dev` in the local checkout. **The push was blocked by the permission
+classifier and I did not work around it.** The change is verified and recorded but not live:
+origin/dev does not have it, the runtime does not have it, and the defect remains active. Landing it
+needs operator approval for the push.
