@@ -146,6 +146,48 @@ that is a result, not a failure, and it is the next thing to investigate rather 
 explain away. Writing 1,657 labels and observing Tier-2 still never fire would be the honest
 outcome to report.
 
+## Outcome (written 04:33 UTC, after the apply)
+
+Landed as `activity-api 8e0c579`, cut over by the substrate's own pull-sync at 04:28:23
+(`activity-api mirrored (8e0c579) -> /vessels/activity-api`), verified at the consuming layer:
+the pattern is present in the **deployed** file and `MainPID` moved 3415887 → 3427346, so the
+running process reloaded rather than merely the checkout changing.
+
+| step | result |
+|---|---|
+| dry run | **1,644** — exactly the pre-registered count |
+| apply | `before 1644 → after 0`, snapshot at `/workspace/db-backups/2026-09-06T04-28-56-948Z-repair-recover_endpoint_output_shapes.json` |
+| in-scope rows still blind | **0** |
+| out-of-scope rows (`successful_executions = 0`) | 4,147, deliberately untouched |
+| row-level check | **1,804 / 1,804** in-scope rows carry the decoded shapes |
+| prediction 1 (donors 1,539 → 3,183) | **3,186** — met (+3 from concurrent writes during the window) |
+
+**Functionally, not just numerically:** the donor query the shape-signature match actually runs
+(`CONTAINSANY`) now returns 517 candidates for `shellResult` and 458 for
+`orphaned_capability_scan`. Those pathways previously matched nothing.
+
+### The first verification was wrong, and the write was not
+
+The initial spot-check reported 643/899 agreement and 256 mismatches, all `actual=[]`. The write
+was correct; **the checker keyed on `path_signature`, which is not unique** — 513 rows share
+`4502429f465d532f`. It was comparing rows outside the declared scope (`successful_executions = 0`)
+against a sibling row's plan entry. Re-checked per row against its own `path_activities`:
+1,804/1,804. Recorded because a 256-row mismatch that turns out to be an artifact of a non-unique
+key is exactly the kind of result that gets quietly dropped once it resolves in your favour.
+
+### Still open, deliberately
+
+Predictions 2–4 (shape-mismatch share falls, `shape_signature` matches rise, Tier-2
+`selected > 0`) are **not adjudicated**. They need an observation window, and loadavg was 17–30
+throughout — above the floor at which this session trusts a measurement. The post-window baseline
+starts at the cutover, 2026-09-06T04:28:23Z. **Landing and read-back are done; the effect is not
+confirmed**, and if the donor count rose while Tier-2 still never fires, the index was not the
+binding constraint — which is the result to report, not to explain away.
+
+The two root causes remain open as gaps and were **not** fixed here: the `!== undefined` guard
+that an explicit `[]` defeats, and the declared-vs-observed source of `accumulateEndpointShapes`.
+Both change behaviour for all future selections and did not belong in a measurement window.
+
 ## Reversibility
 
 The full write plan (`path_signature` → shapes → provenance) is saved before any write, so every
