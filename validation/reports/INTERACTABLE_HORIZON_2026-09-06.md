@@ -51,13 +51,31 @@ Two independent resolvers invent a path from a gap id. The rejections are
 concentrated in "required file missing" and "path synthesized," which is the
 signature of a fileless goal entering a file-shaped lane.
 
-**3. The signals exist; nothing reads them.** `WORKSPACE_ROOT/interactor-log/`
-holds **384 durable interaction records** — 235 `uiFeedback_write`, 56
-`interactorDismiss_write`, 39 `interactorAssertion_write`, 30
-`interactorEvent_write`, 24 `interactorAttachment_write`, oldest dating to
-2026-08-08. The gap store contains **zero gaps in any `ui` category** (all
-categories enumerated). Conversion rate from human interaction signal to filed
-gap: **384 → 0**.
+**3. The signals exist; nothing reads them — and most are not human.**
+`WORKSPACE_ROOT/interactor-log/` holds **384 durable records** — 235
+`uiFeedback_write`, 56 `interactorDismiss_write`, 39 `interactorAssertion_write`,
+30 `interactorEvent_write`, 24 `interactorAttachment_write`. The gap store
+contains **zero gaps in any `ui` category** (all categories enumerated).
+
+> **CORRECTION.** An earlier revision of this report called all 384 "human
+> interaction signals." That was wrong. Read per record: only **~33 carry
+> `source: stateful-ui-vessel`** and the human complaint grammar. The other
+> **~351 have no source** and carry execution-pool fields (`dispatch_id`,
+> `executionId`, `goal`, `filePath`, `fileContent`, `extract_*`) — substrate
+> impulses written to interactor shapes, including a full
+> `orphaned_capability_scan` payload stored as `uiFeedback_write`. The complaint
+> shape is a dumping ground for the substrate's own traffic.
+>
+> The error came from `grep -o "\"kind\":..." | sort | uniq -c`, which counts
+> **occurrences, not records**: it reported 140 kind-values across a file where
+> only 5 records have a `kind` field at all. **Name the denominator; count
+> records, not matches.**
+
+So the channel is broken twice over: **contaminated** (≈91% substrate noise) and
+**unread** (no consumer). And of the ~33 genuine human records, **26 are
+dismissals** — the lowest-information human act. The system has almost no
+evidence about what a human wants from its surface, because the only instrument
+that would measure it is broken in both directions.
 
 The passthrough resolver's own header admits it
 (`repos/development-vessel/src/resolvers/interactor-passthrough.ts`): the
