@@ -499,3 +499,38 @@ uses to select was corrupted by the very defect the change repairs. A targeted `
 dispatch bypasses ranking and **nothing else**: the drafter, the typecheck, the tests, the semantic
 gate and the cutover all still run and can still refuse. That is the intervention — restoring
 reach, not substituting judgement.
+
+---
+
+# Addendum 7: correction — the lane was landing the whole time
+
+At 12:09 I reported "nothing has landed in development-vessel in 40 minutes." **That was wrong.**
+I ran `git log --since` against my **local checkout without fetching**, and the substrate pushes to
+`origin/dev`. My own consuming-layer law, missed for the third time this session.
+
+Against `origin/dev`, autonomous landings in three hours:
+
+| time | commit | |
+|---|---|---|
+| 10:56 | `b8bad83` | substrate-authored, mitosis cutover |
+| 11:40 | `93d551f` | substrate-authored, `recommit-interactor-signals-…` |
+| 12:18 | `19e0077` | substrate-authored, `route-edit-3e9f4728` |
+| 12:48 | `30849ec` | substrate-authored, `route-edit-08187b1b` |
+
+Four autonomous commits, **no operator hands**, at intervals of 44 / 38 / 30 minutes. `93d551f` at
+11:40 falls *inside* the window I declared empty.
+
+This materially changes the picture I gave: the lane is not stalled. It converts roughly every half
+hour, and the interval is shortening rather than growing. What is starved is not the lane — it is
+the specific gaps I filed, which lose on rank.
+
+## And the 12:48 landing is what killed my dispatch
+
+The empty response from my second targeted dispatch was not a refusal and not a timeout. `30849ec`
+cut over development-vessel at 12:48, and a cutover kills requests in flight *to* the vessel being
+cut over — the same self-edit interference recorded this morning against goal-host. Re-dispatch is
+the workaround; drain-before-restart is the fix.
+
+The cutover also shifted the file: my anchor moved from line 6312 to 6313. It still matches, because
+it is a **verbatim string and not a line number** — which is exactly why the anchor discipline is
+worth the effort. A line-numbered op filed ten minutes earlier would now be silently wrong.
