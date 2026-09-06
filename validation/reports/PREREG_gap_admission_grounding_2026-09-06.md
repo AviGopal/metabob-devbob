@@ -268,3 +268,43 @@ never safety. One rare missed penalty against ~100 wrongly-charged correct fixes
 
 Filed as `a-load-induced-verify-timeout-is-charged-to-the-drafter-as-a-fix-failure`, grounded on
 `feature-compose.ts`, region `classifyEnvironmentFailure`, single verbatim op.
+
+---
+
+# Addendum 3: the pass-regression un-latch is dead in practice
+
+A second, independent instance of the fix-0 class, found while checking how hard the flake control
+actually works. It works harder than I credited — observed shedding **22 of 22** spurious "new"
+failures on a re-run, so the suite emits roughly that many per run under load and the control
+correctly discards them.
+
+But every observed `FLAKE CONFIRMATION` line, over three days and ~200 occurrences, ends the same
+way: `(pass 2188 -> null)`, `(pass 1341 -> null)`, `(pass 2041 -> null)` — **the second run's pass
+count never parses.** Not once.
+
+Both runs issue the identical command (`timeout 240 bun test --timeout 20000 2>&1`), and the
+*first* run parses fine, so this is not a parser bug: the re-run is being killed at its 240 s cap.
+The consequence is structural:
+
+```ts
+if (passRegressed && basePass !== undefined && curPass2 !== null && curPass2 >= basePass)
+  passRegressed = false;
+```
+
+`curPass2` is null in every observed case, so **this un-latch can never fire**. And
+`testOk = confirmedNewTest.length === 0 && !passRegressed` — so a draft that trips the pass
+regression is rejected even when the re-run sheds *all* of its failures.
+
+**134 of 3,008 compose reports (4.5%) were rejected carrying `PASSING TESTS DISAPPEARED`.** Some
+fraction are genuine — a draft that breaks module load really does delete coverage — and the
+un-latch exists precisely to rescue the rest. Since it never fires, **none are rescued**. I cannot
+say how many of the 134 are false; I can say the mechanism that would tell them apart is dead.
+
+**The generalization, now with two independent instances:** a control built to correct for noise is
+disabled by the very conditions that produce the noise. Fix 0 is the flake re-run that reproduces
+load-induced timeouts because both runs share the load. This is the pass-count un-latch that cannot
+parse a re-run the load already killed.
+
+**Not filed as a fourth gap**, deliberately and for the same reason as the `runner_up` finding: the
+lane holds one slot, load is 23, and three grounded gaps are already queued and unserved. Adding a
+competitor now costs more than it buys. It is next in line if fix 0 lands.
