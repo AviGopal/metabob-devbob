@@ -163,14 +163,42 @@ neither arm produced an ablation-tagged trace: 0 of the 96 executions in the win
 experiment cannot distinguish *reuse hurt* from *the ablation never applied*, so it yields no
 counterfactual claim. Recorded as inconclusive rather than dressed up.
 
-Chasing why produced the stronger result: **`ablation:disableReuse` has never appeared on any
-execution in the system's recorded history — zero, ever.** Positive control on the identical query
-shape: 13,367 executions carry `dispatcher_used:goal-host`, so the zero is real and not a wrong-key
-probe. Law 12's own counterfactual lever is implemented, documented, parsed, forwarded and tagged —
-and has never fired. **No floor arm has ever been recorded**, which means every "the learned pathway
-did better" comparison in this system is uncontrolled by construction, and the ceiling claim has
-never been tested against its own control. Filed as
-`the-ablation-counterfactual-lever-has-never-fired-in-recorded-history`.
+### ⚠ RETRACTED AT 06:07 — I published a claim on a control that did not test the writer
+
+**What I wrote first, and it was wrong:** "`ablation:disableReuse` has never appeared on any
+execution in recorded history — zero, ever," with a positive control of 13,317 executions carrying
+`dispatcher_used:goal-host`.
+
+The zero is real; the **control was invalid**. `dispatcher_used:goal-host` is written by a *different
+code path* than the tag under test. The ablation tag is pushed into `effectiveTags` at
+`src/index.ts:15209`, and a control on **that same writer** shows those tags essentially never reach
+the `execution` table: `execution_path:fresh_derivation`, `walk_tier:1` and `attempt_count:1` each
+appear on **exactly one row out of ~36,000**. An absent tag in a store where its own siblings appear
+once in total is a blind probe, not evidence.
+
+**A control must exercise the same path as the value under test, or it certifies nothing.** Mine
+certified nothing, and I had already committed it and reported it before catching that.
+
+**What survives:**
+
+1. The lever is implemented and reachable — parsed at 14675, forwarded at 15189, tagged at 15209,
+   all inside `handleRunGoal`.
+2. Three dispatches with a body verified to parse and to contain `ablation.disableReuse=true`
+   produced no ablation-tagged execution row and no "reuse SUPPRESSED by ablation" journal line —
+   though that line only prints when there *is* a cache hit to suppress, so its absence is also weak.
+3. The A/B therefore cannot distinguish "reuse is harmful here" from "the ablation never applied,"
+   and **no counterfactual claim is drawn from it**.
+
+**What is now the actual open question:** where `effectiveTags` are persisted. They are not landing
+on `execution` rows systematically, so until that sink is identified, *nobody can tell from outside
+whether an ablation was applied* — which is a real defect in itself, and the one worth fixing. An
+evaluability lever whose activation is unobservable is not an evaluability lever.
+
+**The underlying concern is unproven but unrefuted:** if no ablated floor arm is recorded anywhere,
+then "the learned pathway did better" comparisons are uncontrolled and the ceiling claim has never
+been tested against its own control. That must be settled by finding the sink and counting ablated
+arms there — not by re-running the query that produced this retraction. Filed (and now corrected in
+place) as `the-ablation-counterfactual-lever-has-never-fired-in-recorded-history`.
 
 **A second trap found while debugging it:** the same handler reads `body.learning_mode` in
 snake_case while the internal option is `learningMode`. A caller sending `learningMode` has it
