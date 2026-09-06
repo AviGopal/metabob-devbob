@@ -1096,3 +1096,80 @@ is not "build a check"; it is "route exactly-specified gaps down a synthesis pat
 exists, and make the gap-authoring format produce it." The check that fails today is an LLM judge
 returning `verified: true` for a change that did not occur; the deterministic alternative is already
 in the file.
+
+---
+
+# Addendum 17: root cause found, one character landed autonomously, effect measured
+
+## The root cause of every drafting failure today
+
+`feature-compose.ts:3974`:
+
+```ts
+if (!(/REPLACE|WITH:|INSERT AFTER|ANCHOR/i.test(spec)) || spec.length > 3500) {
+  const refined = await llmCallWithFailover(llmEndpoints, refineSpecPrompt(spec, …), model);
+  spec = trimmed;                       // the caller's verbatim spec is OVERWRITTEN
+}
+```
+
+The guard is meant to protect a spec that already carries an explicit anchor cue. The `||` clause
+overrides that protection for **any** spec over 3500 characters — and `specFromGap` inflates every
+gap spec with a ~40-line live-file grounding window, so the length clause fires routinely.
+Measured: **`[spec-refine] applied` 15 times against 3 skips** in the 95 minutes before the fix.
+
+Two consequences, both observed today:
+
+- The composer received **LLM-invented JSON edit plans** whose `old_string`/`new_string` did not
+  match the gap. One landed an unrequested vessel-name sanitizer on an adjacent line — the
+  confabulated commit `3ca47589` that produced the self-sealing false closure.
+- `synthesizeVerbatimEditOps`, which runs **later in the same function** (line 4019) and bypasses
+  the LLM planner entirely for a verbatim replacement, has fired **zero times in three days** —
+  because refinement destroys the fenced format it requires before it ever runs.
+
+## The fix, and the causal chain
+
+Filed as a one-character gap: `||` → `&&`, so refinement runs only when a spec is long **and**
+carries no anchor cue. The substrate drafted, verified, gated, committed, pushed and cut over:
+
+```
+64968c1 Substrate Autonomous 20:05
+  substrate-authored: apply spec-refinement-overwrites-a-verbatim-anchor-whenever-the-spec-is-long-…
+```
+
+Verified on `origin/dev` by `git log -S`, present in the runtime at line 3974, deployed —
+`ExecMainStartTimestamp 20:05:08`.
+
+**Effect, split at the process start and not the commit:**
+
+| window | `[spec-refine] applied` | `skipped` |
+|---|---|---|
+| 18:30 → 20:05:08 | **15** | 3 |
+| 20:05:08 → now | **0** | 2 |
+
+83% of specs were being overwritten; none have been since. **n=2 after is small — Fisher's exact on
+15/18 vs 0/2 is ≈0.1, not significant on its own** — but the mechanism is deterministic and read
+from source: changing `||` to `&&` in that predicate cannot do anything else. Mechanism plus
+direction, not counting alone.
+
+That is the causal association this window was for: an action was taken, the substrate landed it
+autonomously, and the environment changed in the predicted direction, measured at the consuming
+layer.
+
+## The prediction that FAILED
+
+I predicted the synthesizer would now fire. **It did not** — still zero. The stored spec shows **5
+fence markers** (an odd number) and is truncated at exactly 8000 characters, so the full spec
+carries more than the two fenced blocks `fences.length !== 2` demands. `specFromGap` injects its own
+fenced grounding block.
+
+So the deterministic path remains unreachable **from the gap lane by construction**, for a second
+and independent reason. Fixing the refiner was necessary and not sufficient. The next step is to run
+the synthesis against the pre-grounding summary rather than the assembled spec — not attempted here,
+and stated as the open item rather than implied as done.
+
+## Also confirmed: the falsifier marker mechanism works when the marker is right
+
+The gap carried `hardcoded_url = "|| spec.length > 3500"`. When the fix landed, that literal went
+absent and the gap correctly self-verified as resolved — the `already_resolved` verdict I first read
+as another false closure was, this time, accurate. The mechanism is sound; what failed earlier was
+an auto-classifier choosing a marker from an adjacent line the gap never mentioned.
