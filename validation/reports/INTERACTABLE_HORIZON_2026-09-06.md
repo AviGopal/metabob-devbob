@@ -352,3 +352,51 @@ This matters beyond one record. Law 7 measures progress by gap close rate, close
 latency, and durability. A closure produced by *asserting* a remedy rather than
 performing one makes all three measure fiction, in the flattering direction.
 Filed as `a-gap-was-closed-with-a-remedy-that-never-happened`.
+
+## Proving the design claim: what "closed" means, measured
+
+The design argument — that a surface must display claims *with* their verification
+state — is testable. If `closed` is displayed as one word over every record, how
+much of what it reports is actually a repair?
+
+Read from the live store (n=2,817), separated by identifier prefix:
+
+| Record kind | Total | Closed | What closing means |
+|---|---:|---:|---|
+| `auto_draft_decision:*` | 890 | 890 | **Bookkeeping.** A decision log, one row per distinct goal, closed when the dispatch finishes by `closeAuthoringDecisions`. |
+| `route-edit:*`, `recommit-*` | 631 | 211 | **Bookkeeping.** Edit-route records. |
+| everything else | 1,296 | 741 | **Defects** — records describing something actually wrong. |
+
+**A correction I nearly published.** My first reading was "848 gaps closed merely
+because a dispatch completed" — the hollow-completion trap at store level. Reading
+the code refuted it: `repos/goal-host-vessel/src/index.ts` closes those rows as
+*"decision-log hygiene,"* one per distinct goal, and closing them on completion is
+correct for what they are. The comment says so plainly. **The defect is not that
+these close wrongly; it is that one `status` vocabulary spans three
+incommensurable record kinds, so one count mixes them.**
+
+Of the **741 genuine defect closures**:
+
+- **547 expired** by `gap_lifecycle_scan`, **7 auto-closed** → **554 (74.8%) timed
+  out rather than were repaired**
+- **185 (25%)** carry no marker at all — closed, mechanism unrecorded
+- **27 (3.6%)** carry a `remedy` string, and a remedy is *prose that nothing
+  checks* — one of the 27 was verified this session and had not happened
+- **1** is a genuine verified closure: *"RETRACTED — mechanism refuted by
+  verification."* One record in 741 names its own refutation.
+
+So law 7's close rate, computed over an undifferentiated `closed`, is dominated by
+decision-log hygiene and TTL expiry. Filed as
+`one-closed-vocabulary-covers-three-incommensurable-record-kinds`.
+
+**This is the proof that structure is a semantic commitment.** No data changed
+between the two readings above — only how the records were grouped. One structure
+reports 1,841 closures as progress; the other reports 27 asserted remedies, 1
+verified closure, and 554 timeouts. A rendering of the same store published at the
+artifact link records the comparison.
+
+The board already does the right thing once — it renders `reached` rather than
+`status`, and says a verdict is only what the walk recorded. Everything here is an
+argument for generalising that one instinct: separate the record kinds, distinguish
+repaired from expired in the vocabulary itself, and gate a close on evidence that
+the behaviour stopped.
