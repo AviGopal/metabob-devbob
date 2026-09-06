@@ -281,3 +281,31 @@ produces them — they need the consumer to read tags at completion instead. `ab
 `learning_mode` are parsed from the request body earlier in the same function and **can** be hoisted,
 which makes the observability of the counterfactual lever a two-line fix. Recorded because a wrong
 remedy in a gap routes a composer at an impossible edit.
+
+## Repair landed and verified (06:25)
+
+The two hoistable pushes were inserted **before** the handoff, as a pure insertion (the originals
+remain below, now redundant and harmless — a single additive op composes far more reliably than a
+move, which the first attempt proved by producing a comment-only diff that the semantic gate
+correctly hard-failed with *"zero behaviour delta — added lines are comment/whitespace-only"*).
+
+Landed by the substrate itself: `goal-host-vessel 6273bf6 substrate-authored: apply
+route-edit-e051be20-compose-report via mitosis cutover`. Inserts at lines **15174–15175**, handoff at
+**15214**, originals at 15249–15250.
+
+**Verified at the consuming layer, after a real reload** — MainPID 3503909 → 3640152, then two
+dispatches carrying `ablation.disableReuse`:
+
+| tag | before | after |
+|---|---|---|
+| `ablation:disableReuse` | **0 in all recorded history** | **1** |
+| `learning_mode:observe` | **0** | **1** |
+
+The `learning_mode` half needed the body key `learning_mode` (snake_case); the first attempt sent
+`learningMode` and was silently ignored, which is the same trap recorded above and is now
+demonstrated rather than inferred.
+
+**What this changes:** the ablated floor arm is now identifiable in the trace, so the counterfactual
+this window set out to measure — is the learned pathway actually cheaper than re-deriving? — is
+*runnable* for the first time. It is still **not measured**. That remains owed, along with the
+aggregate reuse-rate adjudication, and both want a window at loadavg <~10.
