@@ -175,6 +175,35 @@ against a sibling row's plan entry. Re-checked per row against its own `path_act
 1,804/1,804. Recorded because a 256-row mismatch that turns out to be an artifact of a non-unique
 key is exactly the kind of result that gets quietly dropped once it resolves in your favour.
 
+### Predictions 2–3: an existence proof, recorded 05:06 UTC
+
+Not the rate adjudication (that still needs a window at loadavg <~10), but something stronger than
+an aggregate for the instances it covers: **a specific recovered pathway was used, twice, by the
+exact mechanism that could not see it before.**
+
+Two goals dispatched at 04:58 and 04:59 both logged:
+
+```
+pathway reuse: accepted 1-step pathway via shape_signature cover=1.00
+  borrowed_from_goal=b5302926722fb9ca (15/15 reached)
+```
+
+That pathway is `path_signature = 4502429f465d532f`, activities `['satisfier:shellResult']`.
+
+The counterfactual is **recorded, not reconstructed** — the rail's pre-mutation snapshot holds
+**360 rows carrying that signature, every one with `endpoint_output_shapes = []`**. So before
+04:28:56 that family matched nothing under `CONTAINSANY` and was invisible as a donor; after the
+write it carries `['shellResult']`; and thirty minutes later it was borrowed by two goals with
+*different* `goal_hash`es, both of which reached with answers verified against ground truth
+(1346 and 6212, each independently recomputed by a second derivation).
+
+Chain: backfill → the family becomes addressable → the shape-signature donor query finds it →
+cross-goal reuse at `cover=1.00` → correct reaches.
+
+**What this is not:** proof that the aggregate reuse *rate* rose. Two instances are two instances.
+The honest claim is that the recovered data is demonstrably load-bearing in the live selection
+path, which is the part that "donors went 1,539 → 3,186" could not establish on its own.
+
 ### Still open, deliberately
 
 Predictions 2–4 (shape-mismatch share falls, `shape_signature` matches rise, Tier-2
