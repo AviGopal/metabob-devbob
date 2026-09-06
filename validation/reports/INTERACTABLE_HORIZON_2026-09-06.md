@@ -447,3 +447,64 @@ what would make the relevance model trainable.
 
 Filed as `the-known-wrong-panel-will-report-expiry-as-interface-repair`, with the
 prediction pre-registered as its falsifier.
+
+## Does the surface co-evolve with the system?
+
+Half of it does, by design and unusually well. The other half does not exist.
+
+### Rendering: solved, and correctly
+
+`ui/src/components/ContentRender.tsx` states the principle outright:
+
+> The shape vocabulary is OPEN — hundreds of shapes, learned by observation
+> rather than declared, and ragged enough that whole prose sentences have been
+> registered as shape names. No renderer-per-shape is possible. Content, however,
+> arrives in a small CLOSED set of forms. So: dispatch on the form, and make the
+> verbatim branch the DEFAULT.
+
+Nine forms — `prose`, `text`, `rows`, `diff`, `empty`, `terminal`, `record`,
+`scalar`, `stub` — cover 393 advertised shapes, and `terminal`, `record` and
+`scalar` fire **only on positive evidence** (a full successful `JSON.parse` of a
+non-truncated preview), falling back to verbatim rather than draw a value they
+could not confirm. As the file puts it: a surface that renders blank for
+unanticipated shapes *"has failed at exactly the moment it mattered, and one that
+pretty-prints something it misidentified has failed worse."*
+
+**A new shape renders with no code change.** That is exactly the co-evolution
+property required, and the open-vocabulary/closed-form split is the right answer.
+`renderPolicy` extends it: rendering is steered by a shaped impulse read at use
+time, so the built-in heuristic is *"demoted from a decision to a prior"* — law 1
+applied to the surface itself.
+
+### Selection: absent
+
+There is **no mechanism for what to show or when**. The UI source contains **zero
+references to relevance**, while the substrate computes and stores
+`impulseRelevance`, `impulseRelevance_write`, and `impulseRelevancePenalty_write`.
+The relevance model never reaches the surface.
+
+Ordering is fixed to `startedAt` then `dispatchId`, and that is **deliberate and
+right**: sorting by status or reach would move a row out from under a reader at
+the moment it becomes worth reading — `lib/sort.ts` names this as *the attested
+failure this whole surface was rebuilt to fix*.
+
+So **the repair is not to rank by relevance.** That would reintroduce the failure
+they engineered out. The repair is to **select rather than reorder**: decide what
+enters the list at all, and keep the stable comparator within it. Stability and
+relevance are in genuine conflict only if you try to solve relevance by sorting.
+
+Measured cost of having no selection: 16 of 50 rendered rows carry neither goal
+text nor an `executionId`, and `answerBody` is null on 47 of 50.
+
+### Input: free-form where it matters, closed where it is safe
+
+The Ask box takes arbitrary natural language and the system owns the
+decomposition — law 13 honoured. `surfaceIntent` is narrower on purpose: prose
+about *changing the surface* is parsed deterministically against a closed
+vocabulary, and what it cannot parse it **reports as unparsed** with the
+vocabulary it does understand, never silently dropping a clause. Escalation to an
+LLM is an explicit human step, not a hidden fallback. So "input in any form" holds
+for asking the system to do work, and is deliberately bounded for reconfiguring
+the surface — an honest trade, not a gap.
+
+Filed as `the-surface-has-a-render-architecture-and-no-selection-architecture`.
