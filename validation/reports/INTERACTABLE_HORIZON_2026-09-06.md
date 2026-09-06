@@ -149,14 +149,36 @@ Quoting a comment aims the drafter at a region where nothing it writes can run.
    block. The compose started and resolved 68 anchor candidates for `store.ts`,
    then produced no plan within ~15 minutes.
 
-**This second attempt is NOT scored.** Host load average was **12.7** — above the
-threshold at which any judgement about a fix is trustworthy — and the same window
-shows `[llm-failover] all 1 endpoint(s) failed transiently` and two further
-`operation timed out` errors. A stalled compose under LLM timeouts is
-infrastructure, not evidence about the horizon, and calling it a lane failure
-would be exactly the "resting state read as terminal" error this operator has
-made eleven times. **The surface itself has not yet improved; the honest status is
-one correct refusal and one unjudged attempt.**
+5. **It landed** — `f555bed4 feat(human-surface-vessel): close the feedback loop
+   through the box`, roughly 40 minutes after dispatch, with no operator hands.
+   The code is exactly what the goal specified: `hydrateFeedbackFromLog()`
+   defined **outside any comment**, invoked at **module scope**, `readFileSync`
+   on `${WORKSPACE_ROOT}/interactor-log/uiFeedback_write.jsonl`, wrapped in
+   try/catch. The comment-anchor lesson held on the retry.
+
+   (An earlier revision of this section called this attempt "unjudged" because
+   the host was at load 12.7 with LLM timeouts. It was slow, not failed.)
+
+**And the specification was wrong.** The change is correct against the goal I
+wrote; the goal was written *before* I discovered the log is ~91% substrate
+spillover. It pushes every record unconditionally, so on restart the human
+complaint panel fills with `orphaned_capability_scan` payloads — **worse than the
+empty state it replaces**. It also pushes raw log lines
+(`{id, shape, visibility, received_at, pointer}`) directly as `Feedback` entries
+without mapping or validation, and ignores `MAX_HISTORY`.
+
+Not yet active: the unit has not restarted since **2026-08-28**, and module-scope
+code runs only at import. Filed as
+`feedback-hydration-will-flood-the-panel-with-substrate-spillover`, with the
+repair (filter on `pointer.source` and `pointer.kind`, map onto `Feedback`, cap at
+`MAX_HISTORY`) and a standing instruction not to restart the vessel until it is
+fixed.
+
+**The honest verdict on the demonstration:** the loop works end to end — filed,
+picked up, routed, drafted, refused when inert, retried, landed. What it cannot
+do is notice that the operator asked for the wrong thing. **Every gate reads the
+diff against the goal; none reads the goal against reality.** That is the same
+defect as the missing effect gate, one level up.
 
 ## What improvement looks like
 
