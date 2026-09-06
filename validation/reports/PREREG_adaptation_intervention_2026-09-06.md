@@ -273,3 +273,11 @@ what measured 702 `learned_pathway` walks this session). The defect is confined 
 **Remedy is verifiable the way it was found:** move the pushes above 15173 (or pass a thunk, or read
 tags at completion). After landing, `execution_path:*` should appear on new rows at a rate comparable
 to `dispatcher_used:goal-host`; if it does not, the change is inert.
+
+**Correction to my own remedy (06:11).** "Move the pushes above 15173" is only right for two of the
+five. `execution_path`, `walk_tier` and `attempt_count` are computed from the `seek` **result**
+(`classifyExecutionPath({...seek})`, `seek.attempts`) and cannot be hoisted above the call that
+produces them — they need the consumer to read tags at completion instead. `ablation` and
+`learning_mode` are parsed from the request body earlier in the same function and **can** be hoisted,
+which makes the observability of the counterfactual lever a two-line fix. Recorded because a wrong
+remedy in a gap routes a composer at an impossible edit.
