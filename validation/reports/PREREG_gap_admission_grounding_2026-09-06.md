@@ -203,3 +203,68 @@ the work — refusals concentrate when throughput is highest.
 verdict is INCONCLUSIVE, not wrong, and the gap remains open for the lane to retry when the box is
 quiet. The system was not incapable here — it located the line, understood the symbol, and applied
 the change cleanly. Its verifier was noisy.
+
+---
+
+# Addendum 2: fix 0 is a label, not a mechanism — and the harm chain is four-wide
+
+Following the refusal into the charging site changes the fix from "build load-awareness" to
+"reuse what is already there."
+
+**The exemption already exists and is already honored.** `gap-to-feature.ts`:
+
+```ts
+export function isNonAttemptComposeResult(cb) {
+  if (String(cb.failure_kind ?? "") === "environment") return true;
+  ...
+}
+// line 3686:
+if (!allOk && !pointer.dry_run && !isNonAttemptComposeResult(lastBody)) await bumpFailedAttempts(gap);
+```
+
+**And `failure_kind` is already computed** — `feature-compose.ts:6282`:
+
+```ts
+failure_kind: effectiveVerdict === "FAVORABLE" ? null
+  : (classifyEnvironmentFailure(cutovers) ? "environment" : "fix"),
+```
+
+`classifyEnvironmentFailure` inspects **`cutovers` only**. A verify-stage environment failure is
+therefore labeled `"fix"` and charged. The function's own comment records the identical defect one
+stage earlier — a change-window lease deferral "was classified as a `fix` failure and charged to
+the drafter, for an environment condition the drafter did not cause and cannot fix." Repaired for
+cutovers; never extended to verify.
+
+So fix 0 is one line, inserted after a unique anchor, using `verify` (declared at 5147, already
+captured by the closure):
+
+```ts
+if (/timed out after \d+\s*ms/i.test(JSON.stringify(verify ?? []))) return "env_test_timeout";
+```
+
+## The harm chain is wider than a rank penalty
+
+`bumpFailedAttempts` does four things in one call. A single 5.79 ms overrun therefore causes:
+
+1. `failed_attempts++` → `landabilityScore` subtracts `min(fa * 0.1, 0.4)`. Two refusals = **−0.2**
+   of rank, against a field topping out at 0.84–1.125. Measured live on
+   `compose-grades-…`: grounding bought it +0.4; the refusals took back half.
+2. `updateCalibration(category, false)` → a false negative into the category calibration.
+3. A **bounded human-authorized exemption is spent** — one attempt closer to re-escalation, on a
+   failure no human decision caused.
+4. `joinDecisionOutcome(meta, { landed: false })` → a **causal decision-outcome record** asserting
+   the decision led to no landing, when the cause was machine load.
+
+Item 4 is the sharpest. The standing directive for this window is that the system must *causally
+associate its actions on the environment with observable changes*. At this site it does exactly
+that — and records the wrong cause.
+
+## Accepted cost, stated in the gap rather than discovered later
+
+A draft that introduces a genuine hang also times out, and after this change is labeled
+environment and not charged. That signal loss is deliberate and bounded: `ok` stays false and
+`rolled_back` stays true, so a hanging draft still **cannot land**. Only credit assignment moves,
+never safety. One rare missed penalty against ~100 wrongly-charged correct fixes.
+
+Filed as `a-load-induced-verify-timeout-is-charged-to-the-drafter-as-a-fix-failure`, grounded on
+`feature-compose.ts`, region `classifyEnvironmentFailure`, single verbatim op.
