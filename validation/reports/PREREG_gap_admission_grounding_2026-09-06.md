@@ -534,3 +534,45 @@ the workaround; drain-before-restart is the fix.
 The cutover also shifted the file: my anchor moved from line 6312 to 6313. It still matches, because
 it is a **verbatim string and not a line number** — which is exactly why the anchor discipline is
 worth the effort. A line-numbered op filed ten minutes earlier would now be silently wrong.
+
+---
+
+# Addendum 8: my own evidence was degrading the drafter
+
+The next attempt failed on the merits — and the merits were mine.
+
+```
+op_count = 3
+applied  = [ span 6344…, span 82…, … ]      all "repaired": true
+verify   = ok:false, exit_code: 2            (typecheck error)
+```
+
+The gap asks for **one** op at one unique anchor. The composer emitted **three**, including an edit
+at **line 82** — the imports region — and all three had to be anchor-`repaired`, meaning none
+matched cleanly.
+
+The cause is the gap record itself. As I accumulated evidence, the summary grew to **5,623
+characters** and came to quote six separate code fragments — the anchor, the replacement, the
+`bumpFailedAttempts` call site, the `TYPECHECK NOT ANSWERED` string, `min(fa*0.1, 0.4)`, and
+`joinDecisionOutcome(…)`. A drafter reading that cannot tell which quoted code is an *instruction*
+and which is *evidence*. Earlier versions of the same gap, at 3,066 characters with one quoted
+fragment, produced `op_count = 1` and applied exactly at the intended span.
+
+**The evidence that makes a gap convincing to a human reviewer is the same text that makes it
+ambiguous to the drafter.** Those are opposing pressures on one field, and I had been optimising
+only the first — every addendum in this report made the record better and the instruction worse.
+
+## Pre-registered test
+
+Summary cut from **5,623 → 1,320 characters**: instruction first, one quoted anchor, one quoted
+replacement, an explicit "one op, one line, one file. Add no imports. Touch no other function," and
+the reasoning compressed to a single paragraph. All the evidence now lives in this report, pointed
+to by `classification_metadata.evidence_ref`, plus `max_ops: 1` and `single_file: true`.
+
+**Prediction, recorded before the result: `op_count` returns to 1.** If it does, gap verbosity is a
+causal input to apply drift and the gap store needs the instruction/evidence split as a structural
+property, not as operator discipline. If `op_count` stays at 3, verbosity is not the cause and this
+paragraph is wrong.
+
+This also gives the standing division of labour a sharper edge than "operator supplies verbatim
+anchors": **the operator supplies exactly one anchor and nothing else that looks like code.**
