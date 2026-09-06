@@ -954,3 +954,81 @@ rather than immediately re-staging on top of my own previous attempt.
 
 The system taught me this, from a gap it had already filed. That is the loop working in the direction
 that matters — and it is worth more than the fix I was chasing.
+
+---
+
+# Addendum 15: the causal link, confirmed — and it runs the wrong way
+
+The consequence test for fix 1 finally produced a measured causal linkage between a deployed change
+and an observable effect. **The effect is harmful, and the change was mine.**
+
+## What the control found
+
+Testing whether pre-fix grades were decoupled from landing, I first measured: of 186 pre-deploy
+rows, 16 were graded `success: true` and **every one** had `landed_vessels` empty. Before publishing
+that, the control:
+
+| control — is `landed_vessels` ever populated? | |
+|---|---|
+| feature_compose rows carrying the field | **1,034** |
+| rows where it is **non-empty** | **0** |
+
+So an empty value carries no information, and the 16/16 finding is an artifact. **Withdrawn.**
+
+## The real finding, which is worse
+
+`landedVessels` is computed by:
+
+```ts
+.filter((c) => (c?.result as Record<string, unknown> | undefined)?.applied === true)
+```
+
+**The string `applied: true` does not occur anywhere in `vessel-mitosis-cutover.ts`** — zero
+occurrences. That field is only ever set to `false` on refusal paths; the success path returns
+`shape: "cutoverApplied"` carrying `new_git_sha` and `push_status` instead.
+
+So `landedVessels` is **empty by construction**, always. Which means the change I specified and that
+landed as `459bb09`:
+
+```ts
+success: verdict === "FAVORABLE" && landedVessels.length > 0,
+```
+
+makes `success` **permanently false**. The compose grade went from a weak signal (the gate verdict,
+~8.6% true) to **no signal at all** — a constant. The learning loop now receives only β updates for
+`feature_compose`. That is strictly worse than what it replaced, and it is live.
+
+## My error, precisely
+
+I wrote in the gap that `landedVessels` "is already persisted into this same trace as
+`metadata.landed_vessels`", offering that as evidence the data was available. I verified the field
+**existed**. I never verified it was ever **non-empty**. My own standing law — *a zero reads as "no
+data", not "broken key"* — applied to the exact field I was building on, and I did not run it.
+
+The `landed_vessels` metadata has been inert for its entire life, 0 of 1,034. Nothing noticed,
+because nothing consumed it — until I made the grade consume it.
+
+## The repair, filed
+
+One line, at the same site, keyed on the field the cutover actually emits:
+
+```ts
+.filter((c) => String(((c?.result as Record<string, unknown> | undefined)?.new_git_sha) ?? "").length > 0)
+```
+
+This repairs both the inert metadata and the now-constant grade. Filed as
+`landed-vessels-filters-on-a-field-the-cutover-never-sets`, grounded, single op, marked with the
+severity. First dispatch was killed mid-flight by a cutover; **not retried in a tight loop**, per the
+method correction adopted in Addendum 14.
+
+## What this actually demonstrates
+
+The session's causal chain is now closed, in the direction nobody wants but which is the only kind
+that proves the instrument works: **a change was specified, landed autonomously, deployed, and its
+effect on the environment was measured and found to be the opposite of the prediction.** The
+prediction ("the success rate will fall, and that fall is the correction") was wrong in a specific,
+checkable way — it falls to zero and stops carrying information.
+
+That is worth more than a confirmation would have been. A confirmation at n=1 would have been
+indistinguishable from noise; this refutation is structural, reproducible from the source, and was
+caught by a control I nearly skipped.
