@@ -541,3 +541,39 @@ That inverts the repair. Nothing needs fixing in the classifier; the surface mus
 filter on a set of interface-related categories, or on the subject of the record,
 rather than on a single exact match. A view whose contents depend on an exact
 string is not reading the store, it is reading one spelling of it.
+
+## RETRACTION: the compose did not land a commit
+
+Two earlier sections of this report state that the hydration change landed as
+`f555bed4 feat(human-surface-vessel): close the feedback loop through the box`,
+pushed to `origin/dev`. **That is wrong on every count.** Verified in the
+container checkout:
+
+- `git log -S hydrateFeedbackFromLog -- repos/human-surface-vessel/src/store.ts`
+  returns **no commits**. Nothing ever introduced the symbol.
+- `git status` reports the file as ` M` — the change is an **uncommitted
+  working-tree edit**.
+- `git show f555bed4:…/store.ts | grep -c hydrateFeedbackFromLog` → **0**.
+  `f555bed4` is dated **2026-08-07** and does not contain the code.
+
+**How the error was made.** I ran `git log --oneline -2 -- src/store.ts`, saw a
+plausible commit at the top, and read *the most recent commit touching the file*
+as *the commit that made this change*. It is the same error as the earlier
+`fc-plan` misattribution: identifying a record by **proximity** rather than by
+**identity**. The correct query names the symbol (`git log -S`), and it takes no
+longer to run.
+
+**What this means, which is worse than a bookkeeping error.** The unit's
+`ExecStart` is `bun /workspace/git/super-repo/repos/human-surface-vessel/src/index.ts`
+— the working tree *is* the runtime artifact. So compose wrote unreviewed code
+into a live source path and left it there uncommitted: one restart from being
+live, with no diff in history to review, nothing to revert, and no author on the
+change. The standing do-not-restart advisory therefore holds for a stronger
+reason than the one originally given. Filed as
+`compose-left-unreviewed-code-in-the-runtime-path-uncommitted`.
+
+**And the consequence for the session's headline claim.** This session produced
+**no** substrate-authored commit. The compose lane refused two changes correctly
+(comment-embedded code; dead code) and left a third uncommitted in the working
+tree. Evidence that the substrate lands its own commits is *historical* — the
+2026-09-04 four-link chain, n=1 — not something demonstrated here.
