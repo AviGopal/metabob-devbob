@@ -190,5 +190,21 @@ Both change behaviour for all future selections and did not belong in a measurem
 
 ## Reversibility
 
-The full write plan (`path_signature` → shapes → provenance) is saved before any write, so every
-row touched is enumerable and revertible without a schema change.
+**The revert path is the rail's snapshot, not the plan JSON.** The plan was keyed on
+`path_signature`, and that turned out **not to be unique** (513 rows share one), so it cannot
+identify the touched rows unambiguously — it remains useful as the derivation record, not as a
+revert key.
+
+The snapshot the repair rail took before mutating was verified by reading it, not by trusting the
+apply response:
+
+```
+/workspace/db-backups/2026-09-06T04-28-56-948Z-repair-recover_endpoint_output_shapes.json
+  table          : goal_execution_paths
+  affected_count : 1644
+  rows captured  : 1644
+  rows with a record id : 1644      <- the unambiguous revert key
+  sample pre-write endpoint_output_shapes : []
+```
+
+Every touched row is restorable by `id` to its exact pre-write value.
