@@ -400,3 +400,50 @@ The board already does the right thing once — it renders `reached` rather than
 argument for generalising that one instinct: separate the record kinds, distinguish
 repaired from expired in the vocabulary itself, and gate a close on evidence that
 the behaviour stopped.
+
+## What this means for the human surface
+
+**The surface's honesty is capped by the vocabulary it is handed.** The board's
+single best instinct is that it renders `reached` rather than `status` — it refuses
+to let a clean exit pass as a result. It cannot apply that instinct to gaps,
+because the gap store never made the distinction: a record is `open` or `closed`,
+and a closure carries no evidence field a renderer could show. So the surface is
+*structurally unable* to be more honest about gaps than its data model, and
+improving it here is not a UI task.
+
+**A dated, falsifiable consequence.** Expiry is a fixed **7-day TTL** — across 707
+expired records (n=400 sampled) the time from `created_at` to closure has median
+**7.0 days** and minimum **exactly 7.00 days**. The panel resolves `substrateGap`
+filtered to `category: ui_legibility` with *no status filter*, and renders a
+counter of the form `N open · M closed`.
+
+So around **2026-09-13**, with no code change and nothing repaired, the four
+findings filed today flip to `closed` and the panel will read **`0 open · 4
+closed`** — which is exactly what a genuinely fixed interface would look like.
+The panel I populated this session will, in a week, quietly report its own defects
+as repaired.
+
+**It loses items two ways and both resemble success.** Expiry, as above; and
+reclassification, since a lane that touches a record overwrites its category and
+the gap drops out of the `ui_legibility` filter entirely. Neither departure means
+the defect is gone. An emptying panel currently reads as an improving interface.
+
+**Three repairs the surface can make without waiting for the store:**
+
+1. **Render why an item left**, not only that it left — expired, reclassified, and
+   repaired are different events.
+2. **Show the age of each open item.** Forty days open and forty minutes open are
+   different claims, and age is the field that makes a 7-day TTL visible.
+3. **Never show a closed count without its mechanism.** A bare number is the
+   flattering reading by default.
+
+**And the reason this surface matters more than the store.** The conflation between
+repair and timeout is invisible to the substrate — nothing internally complains,
+which is why 554 timeouts have accumulated as closures. It becomes falsifiable at
+exactly the moment it is shown to a person who can say *"no, that was not fixed."*
+The human surface is not a downstream victim of the data model. It is the only
+place the data model becomes correctable — the same reason rendering relevance is
+what would make the relevance model trainable.
+
+Filed as `the-known-wrong-panel-will-report-expiry-as-interface-repair`, with the
+prediction pre-registered as its falsifier.
