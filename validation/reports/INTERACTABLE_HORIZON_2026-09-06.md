@@ -180,6 +180,48 @@ do is notice that the operator asked for the wrong thing. **Every gate reads the
 diff against the goal; none reads the goal against reality.** That is the same
 defect as the missing effect gate, one level up.
 
+## The surface improving — measured, with a before and after
+
+The board's **KNOWN WRONG WITH THIS INTERFACE** panel reads `/api/gaps`, which
+resolves `substrateGap` filtered to `category: ui_legibility`.
+
+**Before:** `0 open · 0 closed`, and the body text *"No legibility findings on
+record. The detector has either not run against this surface or found nothing —
+those are different, and this view cannot tell them apart."*
+
+**After:** `3 open · 0 closed`, rendering three accurate, attributed findings
+about the surface itself, each with its provenance line
+(`operator:claude-fable-cockpit`). The panel that exists to show a human what is
+wrong with the interface now does so.
+
+Two further results came out of doing this:
+
+**The detector ran for the first time.** `ui_legibility_scan` against
+`obsidianEndpoint http://host.docker.internal:18310` returned `available: true`,
+`panel_open: true`, `rules_checked: 3`, `violations: []` — the board passes all
+three computable rules. But **a clean scan emits nothing, so nothing records that
+it ran**: the exact ambiguity the panel names about itself cannot be resolved by
+running the detector. Filed as `a-clean-legibility-scan-leaves-no-trace`.
+(Instrument note: the pointer key is `obsidianEndpoint`; passing `endpoint`
+returns "obsidian-vessel unreachable or ui_view empty" — a wrong-key error that
+reads as a dead surface.)
+
+**Working on an interface gap hides it from the interface.** A natural control
+appeared: two gaps filed minutes apart, both `category: ui_legibility`, both
+citing `repos/human-surface-vessel/src/store.ts`. The one the substrate did *not*
+compose on is still `ui_legibility` and renders in the panel. The one it *did*
+compose on — the hydration defect — is now stored as `edit_intent_route` and is
+therefore **invisible on the surface it is about**. Consistent with
+`substrateGap_write` replacing rather than merging: the compose lane rewrites the
+record and its own category wins. The more attention the substrate pays an
+interface defect, the less a human can see that it is known. Filed as
+`working-on-an-interface-gap-hides-it-from-the-interface`.
+
+That last one is the horizon in miniature. To get a gap *closed* it must cite a
+file and enter the file-shaped lane; entering that lane strips the category that
+makes it *visible* to the human it concerns. Closure and visibility are in direct
+conflict, and nothing in the system notices.
+
 ## What improvement looks like
 
 Three gaps, all filed, all verified in the live store:
