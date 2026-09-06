@@ -361,3 +361,69 @@ the failure as `environment`, so the already-built exemption applies, remains th
 
 The gap record has been corrected in place — the wrong figure replaced in the evidence section, the
 retraction and this band analysis appended, anchor and op verified intact afterward.
+
+---
+
+# Addendum 5: the fix for false charging was falsely charged, and its own failure improved it
+
+Fix 0 was picked at ~12:32 and produced a compose report at 12:33. The drafter reproduced the op
+**exactly** and applied it cleanly:
+
+```
+applied = [{'path': '…/feature-compose.ts', 'kind': 'edit', 'ok': True,
+            'span': {'start_line': 6047, 'end_line': 6048}}]
+verify  = [{'vessel': 'repos/development-vessel', 'errors': 'verify',
+            'exit_code': None, 'ok': False, 'output': ''}]
+```
+
+**Empty output, null exit code — the verify did not run.** An environment failure of the purest
+kind, classified `"fix"` because `classifyEnvironmentFailure` saw only `cutovers`, which were `[]`.
+The gap now carries `failed_attempts: 2` against a single proposal on disk, so one non-merit
+refusal was charged twice.
+
+So: **the fix for environment-failures-charged-as-fix-failures was refused by an environment
+failure charged as a fix failure**, and penalised 0.2 of rank for it. Third instance of the
+self-protecting class this session, and the first observed acting on its own repair.
+
+## The failure improved the fix
+
+My original op matched a timeout string. It would **not** have caught this case — there is no
+timeout text in an empty string. The correct predicate is *unverified*, not *timed out*, and this
+file already draws that distinction one screen above, in the detail it builds for exactly this case:
+
+> `TYPECHECK NOT ANSWERED (TC_EXIT=…) — the check did not complete, so this is UNVERIFIED, not
+> proven broken. Failing closed is correct (an unverifiable edit must not land), **but do not read
+> this as a defect in the draft**`
+
+The code writes that sentence and then discards the distinction when computing `failure_kind`. The
+op is now:
+
+```ts
+if (verify.some((vr) => !vr.ok && (vr.exit_code === null || !vr.output ||
+    /timed out after \d+\s*ms/i.test(vr.output)))) return "env_verify_unanswered";
+```
+
+Three cases, one expression: the check never answered, the verify never ran, or a test timed out.
+A genuinely refuted draft has neither a null exit code nor empty output — a real typecheck failure
+carries TS error text, a real test failure carries failing test names — so this does not uncharge
+drafts that were actually refuted. Failing closed is unchanged: `ok` stays false, `rolled_back`
+stays true. **Only the charge moves.**
+
+This is the loop working in the small: the system's own attempt exposed a case my predicate missed,
+and the gap is better for it.
+
+## Capacity is the dominant constraint, by the lane's own measurement
+
+From a comment in `gap-to-feature.ts`, measured over 48 h: **4,482 picks, 3,699 of them (82.5%)
+ending `verdict=BUSY stage=capacity`.** Fewer than one pick in five ever reaches a composer. That
+reframes the whole session's "why hasn't it composed" question — and it is a resource decision, not
+a defect, which is why I have filed nothing about it.
+
+## Fair-window test, in flight
+
+Container load has fallen to **5.66** — the first window this session inside my own rule for judging
+a fix. I re-dispatched fix 0 as a targeted `pointer.gap_id` compose. This is deliberately **not** a
+bypass of any gate: the system drafts, applies, typechecks, tests and gates its own change; the only
+thing being bypassed is the admission ranking that its own false charge had demoted. If it lands
+here, the earlier refusals were environmental, as claimed. If it fails on the merits at load 5.66,
+my diagnosis was wrong and the record should say so.
