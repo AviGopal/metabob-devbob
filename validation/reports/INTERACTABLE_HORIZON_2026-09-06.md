@@ -1,0 +1,157 @@
+# The interactable horizon: what it means, and what the system can currently do at it
+
+Measured 2026-09-06 against the live substrate. Every number below was read from
+the running system, not from a cache.
+
+## What "the interactable horizon" means
+
+The substrate's gap machinery is **file-shaped end to end**. A gap names a file,
+the walk hydrates that file, a resolver reads it, a drafter proposes a diff, and
+typecheck verifies. That pipeline works — it is the loop that produced this
+session's autonomous dispatches.
+
+Interface gaps are not file-shaped. Their evidence is a **rendered frame** and a
+**stream of interaction signals** — what a human saw, did not understand, clicked
+away from. The file, if there is one, is downstream of the finding, not the
+finding itself.
+
+The **interactable horizon** is the boundary between those two regimes: the outer
+edge of what the system can perceive and act on through its surfaces. Learning to
+learn gaps at that horizon means acquiring the ability to *form* a gap whose
+evidence is a frame plus a signal stream — and, before that, to stop coercing
+every gap into a file path.
+
+## Evidence that the horizon is exactly where the machinery stops
+
+**1. The walk invents a file path when a gap has none.** The substrate
+autonomously dispatched a closer on a gap filed this session. Goal-host logged:
+
+```
+gap-hydration: injected record ui-screenshot-routed-to-hollow-proxy (cited file: none)
+walk rawResolve code_quality: resolver rejected — ENOENT: no such file or directory,
+  open 'substrate/gap/ui-screenshot-routed-to-hollow-proxy'
+```
+
+The gap identifier was coerced into a filesystem path. The generator fired
+correctly; the walk had nowhere to put a fileless gap.
+
+**2. It is a class, not one gap.** Over six hours of goal-host logs: 27 gap
+hydrations (21 with a cited file, 6 without) and 21 rawResolve rejections
+clustering on the same defect —
+
+| count | resolver | rejection |
+|---|---|---|
+| 5 | `source_code` | `filePath is required` |
+| 4 | `problem_detection` | `filePaths is required` |
+| 5 | `problem_detection` | `no analyzable file: ENOENT … 'problems/…'` |
+| 2 | `source_code` | `ENOENT … '/workspace/git/super-repo/gap…'` |
+| 2 | `code_quality` | `ENOENT … 'substrate/gap/ui-screenshot-r…'` |
+
+Two independent resolvers invent a path from a gap id. The rejections are
+concentrated in "required file missing" and "path synthesized," which is the
+signature of a fileless goal entering a file-shaped lane.
+
+**3. The signals exist; nothing reads them.** `WORKSPACE_ROOT/interactor-log/`
+holds **384 durable interaction records** — 235 `uiFeedback_write`, 56
+`interactorDismiss_write`, 39 `interactorAssertion_write`, 30
+`interactorEvent_write`, 24 `interactorAttachment_write`, oldest dating to
+2026-08-08. The gap store contains **zero gaps in any `ui` category** (all
+categories enumerated). Conversion rate from human interaction signal to filed
+gap: **384 → 0**.
+
+The passthrough resolver's own header admits it
+(`repos/development-vessel/src/resolvers/interactor-passthrough.ts`): the
+substrate-side gap-consumer closes the loop *"when it learns to read the log
+files."* It has not.
+
+**4. The surface says so itself.** Captured headlessly from the live board
+(`human-surface-vessel`, `:18310`), the panel titled **KNOWN WRONG WITH THIS
+INTERFACE** reads `0 open · 0 closed` and states:
+
+> No legibility findings on record. The detector has either not run against this
+> surface or found nothing — those are different, and this view cannot tell them
+> apart.
+
+That is the surface independently reporting the same gap filed from the cockpit
+this session (`ui-legibility-scan-resolver-only-never-walked`: zero activities,
+zero executions), and doing so while correctly refusing to conflate null with
+zero.
+
+**5. Mechanism, read from source.** `repos/human-surface-vessel/src/store.ts`
+header: *"No persistence — a restart clears every store."* `/api/state` serves
+`recentFeedback(20)` from that volatile store; `GET :18310/api/state` returns
+empty arrays for feedback, observations, events, asserts, and attachments. The
+surface's self-knowledge is wiped every restart while the durable log accumulates
+unread. Filed as `surface-self-knowledge-panel-reads-a-volatile-store`.
+
+## What the surfaces are
+
+Five, not one — the audit loop and the interaction vocabulary must be shared
+across them:
+
+| Surface | What it is |
+|---|---|
+| metabob cockpit | the agent surface; its footage is the trace store |
+| `human-surface-vessel` `:18310` | the web board a human resolver talks to |
+| `stateful-ui-vessel` `:18270` | the durable panel pool behind it (188 panels) |
+| obsidian-vessel instances | one per vault+human, presence-conditioned |
+| peer substrates | federated surfaces (`dashboard-test-substrate-1` also live) |
+
+Capture works on both regimes: headless Chrome with `--virtual-time-budget` for
+the board (an activity can do this unattended), and the in-plugin Electron
+`obsidian:ui_screenshot` resolver for Obsidian (verified this session, real
+1269×769 frame).
+
+## The loop, run once, on the surface itself
+
+The gap `surface-self-knowledge-panel-reads-a-volatile-store` was filed with a
+cited file and dispatched. What happened is the demonstration, and it is more
+interesting than a clean landing:
+
+1. **Edit-intent routed correctly.** Goal-host detected the named file pre-walk
+   and routed to `feature_compose` — the file-shaped lane worked, because this
+   gap had been given a file.
+2. **The drafter wrote code into a comment.** The goal quoted the header comment
+   (*"No persistence — a restart clears every store."*) as its verbatim anchor,
+   and the drafter placed `hydrateFeedback()` inside that comment block.
+3. **The gate caught it.** Adversarial refuters agreed **2/2 at confidence 1.00**:
+   the function "is called immediately after its definition within the header
+   comment block (lines 30-31)." The compose was refused; the gap stayed open.
+
+That refusal is the system working. A comment-embedded function is inert code —
+it typechecks vacuously, and a diff-reading gate can pass it. This is the exact
+class that has historically landed inert. Here it was caught before landing.
+
+**The operator error worth recording:** the goal-design rule is a *short, unique,
+verbatim* anchor — but the anchor must be **executable code, not a comment**.
+Quoting a comment aims the drafter at a region where nothing it writes can run.
+
+4. **Redispatched with a code anchor** (`export function recentFeedback(...)`),
+   explicitly requiring module-scope invocation and placement outside any comment
+   block. The compose started and resolved 68 anchor candidates for `store.ts`,
+   then produced no plan within ~15 minutes.
+
+**This second attempt is NOT scored.** Host load average was **12.7** — above the
+threshold at which any judgement about a fix is trustworthy — and the same window
+shows `[llm-failover] all 1 endpoint(s) failed transiently` and two further
+`operation timed out` errors. A stalled compose under LLM timeouts is
+infrastructure, not evidence about the horizon, and calling it a lane failure
+would be exactly the "resting state read as terminal" error this operator has
+made eleven times. **The surface itself has not yet improved; the honest status is
+one correct refusal and one unjudged attempt.**
+
+## What improvement looks like
+
+Three gaps, all filed, all verified in the live store:
+
+1. `ui-screenshot-routed-to-hollow-proxy` (class; two named instances) —
+   discovery routes to producers that cannot serve the shape.
+2. `ui-legibility-scan-resolver-only-never-walked` — the audit behavior is a
+   resolver, never an activity; invisible to the learning loop.
+3. `surface-self-knowledge-panel-reads-a-volatile-store` — the surface cannot
+   show the human what it already knows is wrong with it.
+
+The fourth, which this report exists to name: **the gap machinery cannot hold a
+fileless gap.** Until it can, every interface finding must be laundered through a
+file citation by an operator — which is precisely the pattern law 13 calls a gap
+in the system rather than a workflow to institutionalize.
