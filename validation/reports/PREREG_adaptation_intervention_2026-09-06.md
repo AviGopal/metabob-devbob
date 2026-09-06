@@ -113,6 +113,93 @@ operator's unilateral edit during a measurement window.
 (`cover=1.00`, borrowed from a different goal) — so the narrow lexical path failing did not cost
 the reach. Any account of "adaptation" has to say which of the two it means.
 
+## Second experiment (pre-registered 05:22, before running) — is the learned pathway actually CHEAPER?
+
+Demonstrating that reuse *fires* does not show it is *worth* firing. The architecture's ceiling
+claim is that a task the system has done before "runs over the pathway it learned — cheaper,
+faster, and more reliable than re-deriving." That claim has never been measured here.
+
+The substrate already ships the mechanism for measuring it, so nothing is minted: `/run-goal`
+accepts `ablation: { disableReuse: true }`, which suppresses **both** the reached-command cache and
+lexical rebind so a cold-derivation floor arm can be run, and `learningMode: "observe"` makes the
+arm held-out (no cache write, no goal-path, no mint) so the measurement does not contaminate the
+learner. The ablated arm is tagged `ablation:disableReuse` in its trace, so the counterfactual is
+attributable after the fact.
+
+**Same goal text, two arms, run back to back:**
+
+`Count the number of lines in the file /vessels/activity-api/src/routes/activities.ts and report the count.`
+(ground truth **11446**; a donor with identical phrasing exists from goals A and B)
+
+- **arm R (reuse)** — normal dispatch.
+- **arm F (floor)** — `ablation:{disableReuse:true}`, `learningMode:"observe"`.
+
+### Predictions
+
+1. **Both arms reach**, with the answer 11446. If the floor arm fails to reach, reuse is not merely
+   cheaper — it is load-bearing for correctness, a stronger claim than the architecture makes.
+2. **arm R is faster than arm F.** This is the ceiling claim. Direction is what matters; the
+   magnitude on n=1 is an anecdote, not an effect size.
+3. **arm R logs `selected=true`; arm F logs the ablation suppression line** and derives cold.
+
+If arm R is *not* faster, the honest reading is that on one-step command goals the pathway saves
+nothing measurable, and the ceiling claim would need to be demonstrated on multi-step work instead —
+which is a result about where reuse pays, not a failure.
+
+**n=1 per arm.** This is a direction check on a claim never tested at all, not an effect estimate,
+and it is labelled as such wherever it is reported.
+
+### Result of the second experiment (05:35) — INCONCLUSIVE, and the reason is the finding
+
+**The A/B could not be run, because the ablation lever never engaged.**
+
+| arm | template selected | outcome |
+|---|---|---|
+| R (reuse) | `learned-composition-filecontent-to-shellresult` | `reached:false`, `execution_error`, **137 ms** |
+| F (floor) | `learned-satisfier-shell-result` | `reached:false`, `execution_error`, **12 ms** |
+
+Both failed, so the naive reading is "reuse is harmful here." **That reading is not available**, because
+neither arm produced an ablation-tagged trace: 0 of the 96 executions in the window carried one. The
+experiment cannot distinguish *reuse hurt* from *the ablation never applied*, so it yields no
+counterfactual claim. Recorded as inconclusive rather than dressed up.
+
+Chasing why produced the stronger result: **`ablation:disableReuse` has never appeared on any
+execution in the system's recorded history — zero, ever.** Positive control on the identical query
+shape: 13,367 executions carry `dispatcher_used:goal-host`, so the zero is real and not a wrong-key
+probe. Law 12's own counterfactual lever is implemented, documented, parsed, forwarded and tagged —
+and has never fired. **No floor arm has ever been recorded**, which means every "the learned pathway
+did better" comparison in this system is uncontrolled by construction, and the ceiling claim has
+never been tested against its own control. Filed as
+`the-ablation-counterfactual-lever-has-never-fired-in-recorded-history`.
+
+**A second trap found while debugging it:** the same handler reads `body.learning_mode` in
+snake_case while the internal option is `learningMode`. A caller sending `learningMode` has it
+**silently ignored** — so a run intended to be held-out writes back to the learner anyway. The
+mismatched read returns nothing rather than erroring, which is the dominant silent-failure class
+in this system.
+
+### What did survive from the attempt
+
+Arm R's failure was worth the trip. The template it selected,
+`learned-composition-filecontent-to-shellresult`, has **74 executions, all `status=success`, and not
+one `reached=true`** — while its live posterior sums to **α=101.5, β=50.8 across 22 context buckets,
+an implied 67% success rate.** The learner believes it succeeds two times in three; the reach record
+never once says so. It is `deprecated:false` and remains selectable, and it was selected here in
+preference to the plain `satisfier:shellResult` path that reached correctly for three other files
+earlier in the session. Filed as
+`a-composition-that-has-never-reached-carries-a-67-percent-posterior`.
+
+⚠ **Bounds, stated because the numbers invite overreach:** `reached` is None on 67 of the 74 rows, so
+"never reached" means zero recorded reaches, seven explicit non-reaches, and sixty-seven never
+evaluated — not seventy-four measured failures. `n_observations` (105) exceeds executions (74)
+because chain credit is by design.
+
+⚠⚠ **Two wrong-store traps on the way, both caught by controls, neither published:**
+`activity.thompson_alpha/beta` sit at exactly **1.0/1.0 on all 3,888 rows** — which reads as "nothing
+has ever been graded" and is merely a vestigial column; the live posteriors are in
+`context_thompson_scores` (6,807 rows). And ids in `activity` are `activity:⟨name⟩`, so an exact
+match on the bare name returns zero rows and looks like absence.
+
 ## The instrument was lying, and this run caught it
 
 Two lines from the same call, seconds apart:
