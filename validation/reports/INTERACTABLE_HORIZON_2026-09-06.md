@@ -508,3 +508,36 @@ for asking the system to do work, and is deliberately bounded for reconfiguring
 the surface — an honest trade, not a gap.
 
 Filed as `the-surface-has-a-render-architecture-and-no-selection-architecture`.
+
+## Postscript: the panel emptied while we were discussing it
+
+Asked a second time what had actually changed, the answer turned out to be: **the
+surface got worse, by the exact mechanism filed against it.**
+
+Every gap below was filed with `category: ui_legibility` and reclassified within
+roughly forty minutes. None was fixed.
+
+| Gap | Filed as | Now | In panel |
+|---|---|---|---|
+| `a-third-of-the-board-is-rows-a-human-cannot-read` | `ui_legibility` | `audit` | no |
+| `the-known-wrong-panel-will-report-expiry-as-interface-repair` | `ui_legibility` | `bug` | no |
+| `one-closed-vocabulary-covers-three-incommensurable-record-kinds` | `ui_legibility` | *(none)* | no |
+| `working-on-an-interface-gap-hides-it-from-the-interface` | `ui_legibility` | `interface` | no |
+
+The panel fell from four findings to three during one conversation, and the gap
+describing the disappearance **disappeared by the mechanism it describes**.
+
+Two things are now clear that were not when it was filed:
+
+1. **Reclassification is the dominant mechanism, not expiry.** It empties the
+   panel in tens of minutes, where the TTL takes seven days.
+2. **The classifier is not wrong.** Relabelling that record as `interface` is
+   arguably *more* accurate than `ui_legibility`. So the defect is not the
+   reclassification — it is that **the surface filters on one literal category
+   string, so any improvement in classification silently deletes content from the
+   human's view.**
+
+That inverts the repair. Nothing needs fixing in the classifier; the surface must
+filter on a set of interface-related categories, or on the subject of the record,
+rather than on a single exact match. A view whose contents depend on an exact
+string is not reading the store, it is reading one spelling of it.
