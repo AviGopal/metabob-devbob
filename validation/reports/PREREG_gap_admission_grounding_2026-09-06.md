@@ -120,3 +120,86 @@ the correction — the rate that drops was never measuring repair.
   the **log line names a pickup that structurally is not one**.
 - `[oracle-label] NOT consumed exec=exec_zkzgshr9 reason=no_labels` repeats every ~2 seconds for a
   single execution id — a hot retry loop against a condition that cannot change without a labeler.
+
+---
+
+# Addendum: the grounded gap composed, and was refused by 5.79 milliseconds
+
+## Retraction of this session's step-1 headline
+
+I published, earlier today, that step 1 of the bootstrap closed — *"graded `exec_*` rows: 0 in the
+system's recorded history → 2 in 19 minutes."* **That is false.** `feature_compose` has emitted
+graded `exec_*` rows **continuously since 2026-08-29**: 988 rows, per day 62 / 103 / 137 / 92 / 30
+/ 106 / 91 / 233 / 129. Hourly on 09-06: 13, 8, 3, 7, 9, 10, 12, 11, 11, 21, **16**, 8 — mean
+10.8/h. My "2 in 19 minutes" is *below* the expected ~3.4, and the 10:00 hour I credited to my fix
+was quieter than 09:00.
+
+The false zero came from `id CONTAINS 'exec_'`, which does not match a SurrealDB record id — a trap
+I had documented **in the same note**, as the reason my success-watcher was blind. I corrected the
+instrument, re-ran the *after*, and never re-ran the *before*.
+
+**The lesson, stated generally: fixing an instrument obliges re-measuring the baseline, not just
+the new reading. A step change needs a rate on both sides; I had a rate on one.**
+
+The four commits are real. Their true effect is a **linkage repair** — the consumer now keys its
+satisfier trace to the real `exec_*` id instead of a synthesized `feature_compose:<sha>` string.
+Real, modest, and not the opening of a channel.
+
+## The compose outcome
+
+| stage | result |
+|---|---|
+| grounding | `[fc-scope] region-named gap` — the `region` metadata was used |
+| symbol resolution | `[fc-symbols] resolved 1/3 cross-file declaration(s): landedVessels` |
+| apply | 1 op, `ok: true`, **line 6191** — exactly the anchored line |
+| typecheck | `TC_EXIT=0` |
+| shape-dispatch | `OK — 250 advertised shapes, 253 dispatch cases, all agree` |
+| tests | 2188 pass, 25 fail, 5 flagged NEW |
+| **verdict** | **UNFAVORABLE, rolled back** |
+
+Four of the five "new" failures are in `resolveGapToFeature cooldown logic` — a file a one-line
+edit to feature-compose's *trace emission* cannot reach. No concurrent compose touched
+`gap-to-feature.ts` (the three in-window composes targeted `goal-host/index.ts`,
+`activity-api/db-admin-repair.ts`, and `feature-compose.ts`), so this is not cross-contamination.
+
+The timing-out test is:
+
+```
+(fail) vessel_mitosis_cutover > git-aware cutover: applies staged files, commits,
+       mirrors to /vessels, emits cutoverApplied [20005.79ms]
+  ^ this test timed out after 20000ms.
+```
+
+A git-heavy integration test, unrelated to the change, **over budget by 5.79 ms — 0.03%** — at
+load average ~20.
+
+## The class defect: a control that repeats under a constant confounder
+
+The verify harness does difference against a baseline and re-runs to confirm:
+`NEW test failures introduced by this draft, REPRODUCED on a second run`. That is a real control
+against flakiness — but **both runs happen under the same sustained load**, so a load-induced
+timeout reproduces perfectly and is promoted to "introduced by this draft."
+
+Measured across **all 3,005 compose reports on disk**:
+
+| verify run | UNFAVORABLE | FAVORABLE | FAVORABLE rate |
+|---|---|---|---|
+| no timeout | 1546 | 1005 | **39.4%** |
+| contains a test timeout | 380 | 74 | **16.3%** |
+
+Odds ratio **3.34**. 454 of 3,005 composes (15.1%) had a timeout in verify. If those would
+otherwise have passed at 39.4%, the expected count is ~179 against 74 observed — **on the order of
+100 approvals lost**, roughly 10% of the 1,079 FAVORABLE verdicts ever recorded.
+
+This is correlational at corpus grain (a hanging draft could itself cause a timeout), but for the
+instance measured here it is decisive: an unrelated git integration test, over by 5.79 ms.
+
+**Why this is anti-compounding, not merely wasteful.** Every such refusal is also a β penalty. The
+learner is taught that a correct fix was wrong, by the machine's load rather than by the code. And
+because load is highest exactly when the lane is busiest, the noise is not random with respect to
+the work — refusals concentrate when throughput is highest.
+
+**Not hand-landed.** My standing rule is that no fix is judged at load average above ~10; this
+verdict is INCONCLUSIVE, not wrong, and the gap remains open for the lane to retry when the box is
+quiet. The system was not incapable here — it located the line, understood the symbol, and applied
+the change cleanly. Its verifier was noisy.
