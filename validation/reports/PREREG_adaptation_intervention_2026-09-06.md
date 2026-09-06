@@ -242,3 +242,34 @@ prints `selected=no candidates=0` on every call. That is the line a log-scraper 
 never fires" — a false negative baked into the instrument, in a system already misdiagnosed several
 times by trusting a channel's own reporting. Dispatched for removal; the correct end-of-function
 line already carries the information.
+
+### Cause found (06:10) — the tags are pushed onto an array that was already handed off
+
+`effectiveTags` is composed at `src/index.ts:15134`, **passed into the seek call at 15173**
+(`tags: effectiveTags`), and then **mutated at 15207–15209** with `execution_path:*`, `walk_tier:*`,
+`attempt_count:*`, `learning_mode:*` and `ablation:*`. The consumer serialises at call time, so
+everything pushed afterwards is lost.
+
+**Same-writer control** — same array, same consumer, differing only in push time relative to 15173:
+
+| tag | pushed | rows (of ~36,000) |
+|---|---|---|
+| `dispatcher_used:goal-host` | before handoff | **13,318** |
+| `operator:claude-code-operator` | before handoff | **1,651** |
+| `execution_path:fresh_derivation` | after handoff | **1** |
+| `attempt_count:1` | after handoff | **1** |
+
+~13,000:1. This is the control the retracted version should have used.
+
+**Consequences beyond the lever:** `ablation:*` unobservable, so no requested ablation can be
+confirmed from the trace — the correct mechanistic statement of what I first mis-stated as "the lever
+has never fired". `learning_mode:*` unobservable, so a held-out run is indistinguishable from a
+learning one. And `execution_path`/`walk_tier`/`attempt_count` are unobservable *as tags*, while the
+comment at 15205 says "existing trace consumers key on it" — so those consumers read nothing.
+
+Not affected: the **column** `goal_execution_paths.walk_tier`, which is healthy and populated (it is
+what measured 702 `learned_pathway` walks this session). The defect is confined to the tag path.
+
+**Remedy is verifiable the way it was found:** move the pushes above 15173 (or pass a thunk, or read
+tags at completion). After landing, `execution_path:*` should appear on new rows at a rate comparable
+to `dispatcher_used:goal-host`; if it does not, the change is inert.
