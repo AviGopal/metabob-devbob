@@ -1032,3 +1032,67 @@ checkable way — it falls to zero and stops carrying information.
 That is worth more than a confirmation would have been. A confirmation at n=1 would have been
 indistinguishable from noise; this refutation is structural, reproducible from the source, and was
 caught by a control I nearly skipped.
+
+---
+
+# Addendum 16: a deterministic path that has never fired, and a self-sealing false closure
+
+Two findings, both structural, both checkable.
+
+## 1. The substrate has a deterministic edit path. It has never once run.
+
+`feature-compose.ts` contains `synthesizeVerbatimEditOps(specText)`, which **bypasses the LLM
+planner entirely** when a spec carries a verbatim old→new replacement:
+
+```ts
+const fences = [...specText.matchAll(/```[a-zA-Z]*\r?\n([\s\S]*?)```/g)]
+if (fences.length !== 2) return null;
+const hasAnchorCue = /(find|locate)\s+(this\s+)?exact\s+(anchor\s+)?text|exact\s+anchor|old[_\s]?string|anchor\s*:/i
+```
+
+On success it sets `plan = { summary: "deterministic edit synthesized …" }` and logs
+`[decompose] deterministic verbatim-replacement synthesis applied`.
+
+**That log line has zero occurrences in three days.** The path requires *exactly two fenced code
+blocks* plus an anchor cue. Every gap I authored today used unfenced code and the phrase "This exact
+line occurs once", which misses the anchor-cue regex — so every one fell through to the LLM planner.
+
+That planner is what relocated an edit onto `if (dryRun) {` at 4456, onto
+`ok: effectiveVerdict === …` at 6341, and what invented a vessel-name sanitizer. **The mechanism
+that would have prevented all three exists, is wired in, and was never triggered — by me or by the
+substrate's own gap authors.** No new machinery is needed; the format is.
+
+## 2. The false closure is self-sealing, by a marker the gap never mentioned
+
+The `landed-vessels-…` gap was closed citing commit `3ca47589` as a "verified ancestor of clone
+HEAD". Re-opening it with full evidence, it **re-closed within 90 seconds**, twice. The chain:
+
+1. A `gap-falsifier` auto-classified the gap `class1` and set its defect marker to
+   `hardcoded_url = .map((c) => String(c.vessel ?? ""));` — the **adjacent line**, which this gap
+   never mentions. The line I actually targeted is the `.filter(…)` above it.
+2. `verifyGapCondition` reports the defect *absent* when that literal is missing from the file.
+3. Commit `3ca47589` confabulated an edit to **that same adjacent line**, appending a sanitizer and
+   removing the trailing `;` — destroying the marker literal.
+4. Measured now: the marker literal is **absent** (0 occurrences); the real defect
+   `?.applied === true)` is **present** (1 occurrence).
+5. So the gap self-verifies as resolved, and every re-open is re-closed by
+   `sweepPendingLandVerifications`, which runs at the head of every dispatch and keys on the pending
+   sha's **ancestry**, never its content.
+
+Re-opening required clearing `pending_outcome_verification`, `resolution` and `closed_at`
+explicitly — metadata **merges** on write rather than being replaced, so a stale pending sha
+survives an ordinary re-file and immediately re-closes the gap.
+
+**A gap can therefore be permanently unfixable through the lane**: the defect is live, the marker
+that would prove it is gone, and the store reports it fixed with a real commit sha attached.
+
+Marker corrected to the defect itself (`?.applied === true)`); the gap now stays open. Next dispatch
+returned BUSY and was **not** retried in a loop.
+
+## What this changes about the minimum sequence
+
+Item 1 of the sequence — a deterministic correspondence assertion — is **cheaper than stated**. It
+is not "build a check"; it is "route exactly-specified gaps down a synthesis path that already
+exists, and make the gap-authoring format produce it." The check that fails today is an LLM judge
+returning `verified: true` for a change that did not occur; the deterministic alternative is already
+in the file.
