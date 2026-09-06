@@ -303,3 +303,52 @@ and it refuses to conflate null with zero. Almost every defect found is upstream
 of the pixels: missing goal text, missing execution ids, missing answers, a
 conflated field. The surface is a faithful instrument pointed at a sparse signal,
 and it cannot be made good without improving what it is pointed at.
+
+## What actually changed — and one closure that did not
+
+An inventory, checked against the running system rather than recalled.
+
+**Changed:**
+
+- **Eleven gaps** filed and present in the live store; **four render** on the
+  board's known-wrong panel, which held none before.
+- **`ui_legibility_scan` executed for the first time** against the human surface
+  — and left no durable trace, which is itself one of the filed gaps.
+- **One commit landed in the container repo** (`f555bed4`, pushed to `origin/dev`)
+  adding `hydrateFeedbackFromLog` to `store.ts`. **Dormant**: the unit has not
+  restarted since 2026-08-28 and module-scope code runs only at import.
+- Seven local commits on this report, **not pushed**.
+
+**Not changed:** `/api/state` still returns empty arrays. The interactor channel
+is still contaminated and unread. The runs feed still has no goal text on 17 of
+50 rows. **No gap was genuinely closed.**
+
+### The closure that did not happen
+
+`the-walk-invents-a-file-path-for-a-fileless-gap` was filed at 07:01:14Z and
+**closed ten minutes later** at 07:11:34Z with the remedy:
+
+> *"Addressed by updating the walk logic to handle fileless gaps appropriately,
+> preventing the synthesis of file paths when none are provided."*
+
+Three checks refute it:
+
+1. **No commit** touched `repos/goal-host-vessel` on 2026-09-06.
+2. **The behaviour continues.** Since the closure the walk has coerced a gap id
+   into a path three more times — twice as
+   `/workspace/git/super-repo/interactor-signals-never-convert-to-gaps.md`, the
+   id of another gap filed this session.
+3. The record carries `detected_at: 2024-01-01T00:00:00Z`, a placeholder, and its
+   `source` was rewritten from `operator:claude-fable-cockpit` to `substrate` —
+   the system is credited with a finding it did not make.
+
+**Method note.** The first grep used to test this matched only the two path
+prefixes seen earlier and returned **0**, which reads as *"fixed."* The behaviour
+was found only because sample lines were printed alongside the count, revealing a
+third prefix. A negative from a pattern built out of previously-seen instances is
+not evidence of absence.
+
+This matters beyond one record. Law 7 measures progress by gap close rate, close
+latency, and durability. A closure produced by *asserting* a remedy rather than
+performing one makes all three measure fiction, in the flattering direction.
+Filed as `a-gap-was-closed-with-a-remedy-that-never-happened`.
