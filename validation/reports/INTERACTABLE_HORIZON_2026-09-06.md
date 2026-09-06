@@ -237,3 +237,60 @@ The fourth, which this report exists to name: **the gap machinery cannot hold a
 fileless gap.** Until it can, every interface finding must be laundered through a
 file citation by an operator — which is precisely the pattern law 13 calls a gap
 in the system rather than a workflow to institutionalize.
+
+## Audit: what the surface displays, and why
+
+Every element on the board, its data source, and whether it earns its place. The
+test applied to each: **name its reader and the decision it changes.**
+
+| Element | Source | Verdict |
+|---|---|---|
+| Ask box + Send | free text → `dispatch_goal` | **Earns it.** The one place a human acts as more than a spectator. |
+| Eight chips | derived from the advertised shape vocabulary | **Earns it.** "Derived from the 393 shapes the fleet is advertising right now" is exact — the registry returns 393. Clicking fills, does not send, as stated. |
+| Chip legend (dashed / faded / accented) | static caption | **Partly.** "The accented chip changes this page itself" is true and visible. Dashed and faded describe states not currently present, so two thirds of the legend explains nothing on screen. |
+| Runs list (≤50) | `activeDispatches` from goal-host | **Fails, see below.** Exactly 50 rows returned, so the stated cap is honest. |
+| Status pill | `reached`, not `status` | **Earns it, and is the best thing on the board.** One row is `completed` + `reached:false` and correctly displays as *not reached* — the hollow-completion case caught in the render. |
+| Rightmost column | `operator` when present, else `trigger` | **Fails.** Two different questions in one column position. |
+| Runs footer | static caption | **Earns it.** "A verdict here is what the walk recorded — open a run to see what it actually produced" is exactly the right caveat. |
+| Detail pane | selected run | **Promise unfulfillable on a third of rows.** |
+| Known-wrong panel | `/api/gaps`, `category: ui_legibility` | **Earns it**, and now has content. |
+
+### The dominant defect: a third of the board cannot be read
+
+Measured against the feed it renders (n=50):
+
+- `goal` is null on **17** → rendered as *"goal text not recorded on this dispatch"*
+- `executionId` is null on **17**
+- **both** null on **16 — just under a third of the board**
+- `answerBody` null on **47**
+- `reached`: 45 false, 4 true, 1 null
+
+So on sixteen rows a reader can neither see what was asked nor open the row to
+find out, because the detail pane needs an `executionId`. Those rows carry a red
+pill, an elapsed time, and a lane tag. They **inform no decision while reading
+unmistakably as failure** — the surface's dominant visual impression is produced
+by its least informative content. And with `answerBody` null on 94% of rows,
+there is almost nothing for the presentation layer to render either.
+
+This is a data-capture defect surfacing as a UI defect. No layout change fixes
+it; re-rendering a null produces a prettier null. Filed as
+`a-third-of-the-board-is-rows-a-human-cannot-read`.
+
+### The attribution defect
+
+`operator` is null on **35 of 50**; `trigger` is always present. The board shows
+`claude-code-operator` on some rows and `gap-closing` or `run-goal` on others *in
+the same column*, silently falling back. Those answer different questions — who
+asked, versus what lane fired — and that distinction is precisely what separates
+an operator's own work from the substrate's autonomous work. `trigger` even has a
+literal value `operator`, which is a lane name and not a person. Filed as
+`the-runs-column-conflates-who-asked-with-how-it-fired`.
+
+### What the audit says overall
+
+The board's **captions are honest and its verdict logic is right** — it shows
+`reached` over `status`, it warns that a verdict is only what the walk recorded,
+and it refuses to conflate null with zero. Almost every defect found is upstream
+of the pixels: missing goal text, missing execution ids, missing answers, a
+conflated field. The surface is a faithful instrument pointed at a sparse signal,
+and it cannot be made good without improving what it is pointed at.
