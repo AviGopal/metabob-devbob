@@ -1509,10 +1509,24 @@ if [ "$SUPER_FETCH_OK" = 1 ]; then
       # discard work the substrate authored and has not yet landed — the same
       # work that, on the hub, turned out to be a real in-progress activity.
       # Lagging is recoverable; discarding is not.
+      #
+      # TRACKED FILES ONLY (--untracked-files=no). Measured 2026-09-07: the
+      # development-vessel worktree carried 2,526 porcelain entries, of which
+      # 2,494 were UNTRACKED build artifacts (.js/.d.ts/.map from a compiler
+      # run). A submodule checkout does not touch untracked files, so they are
+      # not the hazard this guard exists for — but counting them froze the
+      # worktree at a pointer 396 commits behind origin/dev for three weeks.
+      # That checkout is what the compose vacuous-edit gate's whole-file
+      # backstop reads, so the gate could not see any binding added in those
+      # three weeks and refused correct declaration repairs as "binding never
+      # used". A guard that fails open on an UNREADABLE file does not fail open
+      # on a READABLE-but-stale one: it reads confidently and concludes wrongly.
+      # Counting only tracked changes preserves the protection (real in-progress
+      # edits still skip) while ending the build-artifact freeze.
       _sm_lag=""
       for _sm in $(git -C "$SUPER_DIR" config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}'); do
         [ -d "$SUPER_DIR/$_sm" ] || continue
-        if [ -n "$(git -C "$SUPER_DIR/$_sm" status --porcelain 2>/dev/null)" ]; then
+        if [ -n "$(git -C "$SUPER_DIR/$_sm" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
           _sm_lag="$_sm_lag $_sm"
           continue
         fi
