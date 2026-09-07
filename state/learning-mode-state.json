@@ -1,7 +1,7 @@
 {
   "mode": "develop",
-  "driver": "frontier(40 necessary-but-unavailable; top=host_repo_root)",
+  "driver": "frontier(65 necessary-but-unavailable; top=topology_snapshot)",
   "pending_driver": "develop",
   "pending_count": 0,
-  "updated_at": "2026-09-07T04:48:27.407Z"
+  "updated_at": "2026-09-07T14:44:21.750Z"
 }
