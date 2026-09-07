@@ -1173,3 +1173,66 @@ The gap carried `hardcoded_url = "|| spec.length > 3500"`. When the fix landed, 
 absent and the gap correctly self-verified as resolved — the `already_resolved` verdict I first read
 as another false closure was, this time, accurate. The mechanism is sound; what failed earlier was
 an auto-classifier choosing a marker from an adjacent line the gap never mentioned.
+
+---
+
+# Addendum 18: the loop closed — prediction, autonomous landing, measured effect
+
+The grade repair landed autonomously as `28de0e8` (09-06 20:11), attributed by `git log -S` on the
+predicate, deployed (`ExecMainStartTimestamp 00:26:50`). Runtime line 6248 now reads:
+
+```ts
+.filter((c) => String(((c?.result as Record<string, unknown> | undefined)?.new_git_sha) ?? "").length > 0)
+```
+
+## The measured consequence
+
+| split at 28de0e8 | rows | graded success | non-empty `landed_vessels` | `success == landed` |
+|---|---|---|---|---|
+| before | 1083 | **80** | **0** | 1003 / 1083 |
+| after | 26 | 4 | **4** | **26 / 26** |
+
+Every post-fix success carries a real vessel:
+
+```
+2026-09-06T20:38:54  success=True  landed=['activity-api']
+2026-09-06T20:46:13  success=True  landed=['activity-api']
+2026-09-06T21:38:59  success=True  landed=['development-vessel']
+2026-09-07T00:08:01  success=True  landed=['activity-api']
+```
+
+**Before the fix: 80 graded successes, not one of which coincided with a landing.** The 80
+disagreements in that column *are* the false successes — the learning loop's entire positive signal
+for `feature_compose` was decoupled from whether the repository changed. After: perfect agreement on
+all 26 rows.
+
+The decisive statistic is not the agreement rate (0 disagreements in 26 is *p*≈0.14 on its own) but
+the field transition: `landed_vessels` went from **non-empty on 0 of 1,034 rows** to non-empty on 4
+of 26, which is mechanistically explained — the old predicate tested `applied === true`, a string
+that occurs zero times in the cutover resolver.
+
+## What this closes
+
+The chain the window was opened for, end to end and measured at the consuming layer:
+
+1. Measured a defect: the compose grade was decoupled from landing (0 non-empty in 1,034).
+2. Diagnosed the mechanism from source: the filter keyed on a field nothing sets.
+3. Filed a one-line gap with the correct falsifier marker.
+4. **The substrate drafted, verified, gated, committed, pushed and cut it over autonomously.**
+5. The environment changed in the predicted direction, verified against a baseline established
+   before the change and split at the process start.
+
+Three of today's fixes now have this shape — the environment label (`9822a8e`), the spec-refine
+guard (`64968c1`, 15 refinements → 0), and this one. Ten substrate-authored commits landed between
+19:07 and 00:26 with no operator hands on the code.
+
+## Still open, stated plainly
+
+- The **deterministic synthesizer** has still never fired: `specFromGap` injects its own fence, so
+  `fences.length !== 2` refuses. Fixing the refiner was necessary and not sufficient.
+- The **blind-edit repair** still relocates; the fix is committed locally as `65c3a43` and unpushed
+  (vessel-repo push denied).
+- **Worktree-per-compose** remains the system's own escalated-as-hopeless item, and is what makes
+  landings non-deterministic.
+- The **admission prose-scan** fix is gone — it was live in the mirror, tracked in no repository, and
+  erased by pull-sync exactly as predicted.
