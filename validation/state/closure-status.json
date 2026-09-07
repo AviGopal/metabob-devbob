@@ -1,54 +1,69 @@
 {
   "properties": {
     "operator-memory": {
-      "closed": true,
-      "missing_deps": [],
-      "evidence": "memoryNote resolver live, 1 notes returned",
+      "closed": false,
+      "missing_deps": [
+        "memoryNote resolver in development-vessel"
+      ],
+      "evidence": "HTTP 0",
       "description": "Substrate memory (memoryNote) works without operator ~/.claude/memory files"
     },
     "slash-skills": {
-      "closed": true,
-      "missing_deps": [],
-      "evidence": "all 14 required resolver shapes present",
+      "closed": false,
+      "missing_deps": [
+        "development-vessel reachable"
+      ],
+      "evidence": "health check failed: 0",
       "description": "Skill-equivalent operations available via development-vessel resolvers alone"
     },
     "subagents": {
       "closed": true,
       "missing_deps": [],
-      "evidence": "goal-host-vessel responded: {\"status\":\"healthy\",\"vesselId\":\"goal-host-vessel\",\"vesselName\":\"Goal Host Vessel\",\"shapes\":[\"goal_execution\",\"activity_execution\"],\"version\":\"0.1.0\",\"",
+      "evidence": "goal-host-vessel registered in discovery with goal_execution shape (direct port not mapped; use -p 18210:8210 to expose)",
       "description": "Complex multi-step goals executable via goal-host-vessel without Claude Code subagents"
     },
     "github-actions": {
-      "closed": true,
-      "missing_deps": [],
-      "evidence": "failure_mode_matrix_score resolver responded",
+      "closed": false,
+      "missing_deps": [
+        "failure_mode_matrix_score resolver"
+      ],
+      "evidence": "HTTP 0",
       "description": "Merge/CI gating available via failure_mode_matrix_score without GitHub Actions"
     },
     "operator-shell": {
-      "closed": true,
-      "missing_deps": [],
-      "evidence": "systemd_restart + substrate_health_tick resolvers present",
+      "closed": false,
+      "missing_deps": [
+        "systemd_restart resolver",
+        "substrate_health_tick resolver"
+      ],
+      "evidence": "missing: systemd_restart resolver, substrate_health_tick resolver",
       "description": "Substrate self-heals via systemd_restart + substrate_health_tick without operator shell"
     },
     "operator-spec-authoring": {
-      "closed": true,
-      "missing_deps": [],
-      "evidence": "all 5 spec-authoring resolver shapes present",
+      "closed": false,
+      "missing_deps": [
+        "memoryNote_write",
+        "activity_create_variant",
+        "fs_write",
+        "git_commit",
+        "llm_completion_dispatch"
+      ],
+      "evidence": "could not reach development-vessel /shapes",
       "description": "Spec authoring resolvers present; substrate can author specs without operator"
     },
     "push-away": {
       "closed": true,
       "missing_deps": [],
-      "evidence": "refusal pathway + stats endpoint + durable recording all working (probe shape existent_shape_1779940873908__ recorded)",
-      "description": "Substrate refuses incompetent interventions with cited evidence + durable record (IAL \u00a727.S.6)"
+      "evidence": "refusal pathway + stats endpoint + durable recording all working (probe shape existent_shape_1788744330779__ recorded)",
+      "description": "Substrate refuses incompetent interventions with cited evidence + durable record (IAL §27.S.6)"
     }
   },
-  "audit_run_at": "2026-05-28T04:01:14.868Z",
+  "audit_run_at": "2026-09-07T01:25:40.345Z",
   "audit_tool_versions": {
-    "development-vessel": "0.1.0",
+    "development-vessel": "unreachable",
     "activity-api": "1.20.9"
   },
-  "all_closed": true,
+  "all_closed": false,
   "tested": [
     "operator-memory",
     "slash-skills",
@@ -57,16 +72,5 @@
     "operator-shell",
     "operator-spec-authoring",
     "push-away"
-  ],
-  "lift": {
-    "S4a_coverage_progress": true,
-    "S4b_overall_passing": true,
-    "S4a_consecutive_windows": 1,
-    "S4a_required_consecutive": 3,
-    "last_measured": "2026-05-30T21:05:00Z",
-    "notes": "Timer fixed 30min\u21925min; F24 posterior repair done; boredom exit-0 fix. Window[0] has 20 new shapes. Need windows[1] and [2] to also have new shapes for 3 consecutive.",
-    "timer_fix_deployed": true,
-    "boredom_ticks_per_hour": 12,
-    "window0_new_shapes": 20
-  }
+  ]
 }

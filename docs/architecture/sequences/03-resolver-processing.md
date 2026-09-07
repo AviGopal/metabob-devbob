@@ -34,6 +34,49 @@ sequenceDiagram
     participant LLM as llm-resolver-vessel<br/>(:8220)
     participant Tools as local-tools-vessel<br/>(:8230)
     participant Child as Child execution<br/>(compose)
+    participant API 
+
+    Exec->>Pool: Request activity (e.g., universal-tool-fallback)
+    Pool-->>Exec: Activity state (task, parameters)
+    Exec->>Reg: Resolve capability (universal-tool-fallback)
+    Reg-->>Exec: Resolver metadata (e.g., llm-resolver-vessel)
+
+    alt If LLM-based resolver
+        Exec->>LLM: Invoke llm-resolver-vessel with activity parameters
+        LLM->>Child: Orchestrate child activities (e.g., generate tasks)
+        Child-->>LLM: Child activity results
+        LLM-->>Exec: Resolver output (e.g., generated tasks)
+    else If Tools-based resolver
+        Exec->>Tools: Invoke local-tools-vessel with activity parameters
+        Tools->>Child: Orchestrate child activities (e.g., execute tool)
+        Child-->>Tools: Child activity results
+        Tools-->>Exec: Resolver output (e.g., tool execution result)
+    end
+
+    Exec->>Pool: Store updated activity state and results
+    Pool-->>Exec: Acknowledgment
+
+    note over Exec,Pool: **Improvement for universal-tool-fallback:**
+    note over Exec,Pool: If initial task generation yields 0 tasks, and context implies
+    note over Exec,Pool: relevant signals (e.g., conceptDbDriftReport from child activities),
+    note over Exec,Pool: add a fallback task generation step.
+    note over LLM: LLM-resolver should explicitly include logic to check for
+    note over LLM: `conceptDbDriftReport` or `conceptSourceSample` in its input context.
+    note over Child: Child activities (e.g., `concept-db-drift-reporter`)
+    note over Child: should produce distinct signals that can be consumed by
+    note over Child: `universal-tool-fallback` for implicit task generation.
+
+    Exec-->>API: Activity completion / progress update
+```
+
+```mermaid
+sequenceDiagram
+    participant Exec as ActivityExecutor<br/>(ias-executor-ts)
+    participant Pool as ImpulseStore
+    participant Reg as ResolverRegistry
+    participant LLM as llm-resolver-vessel<br/>(:8220)
+    participant Tools as local-tools-vessel<br/>(:8230)
+    participant Child as Child execution<br/>(compose)
     participant API as activity-api<br/>(:8080)
     participant Ribo as ribosome-vessel<br/>(:8240)
 

@@ -1,0 +1,14 @@
+{
+  "id": "noop-light-dispatch-test",
+  "tasks": [
+    {
+      "id": "noop-task",
+      "resolver": "noop",
+      "config": {
+        "type": "noop"
+      },
+      "output_shape": "commandResult"
+    }
+  ],
+  "output_shapes": ["commandResult"]
+}
