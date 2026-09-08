@@ -1304,3 +1304,60 @@ length 160 that identity nonetheless refuses, which would mean a second key exis
 `identity-vessel` has been running since **2026-08-27 — 11 days without restart**, while activity-api
 restarted 8 times in the onset hour. That is the most conspicuous asymmetry around the 21:00 onset
 and it is **not** established as causal.
+
+---
+
+# Addendum 20: the grade fix is landed, deployed, correct — and inert at the learner
+
+Dispatch-and-observe, run on a fix already live. The prediction was that `feature_compose`'s
+posterior would drift toward its true landing rate once `28de0e8` keyed the grade to landing.
+
+**It has not moved at all.**
+
+| `feature_compose` posterior | value |
+|---|---|
+| alpha / beta | 6.918 / 2.973 |
+| n_observations | 64 |
+| **last_updated_at** | **2026-09-06T10:42:06** |
+| implied success rate | **0.699** |
+| measured landing rate since the fix | **4 / 26 = 0.154** |
+
+That timestamp is the same reading I recorded on the morning of 09-06. The arm has not updated in
+over 36 hours, across a window in which 26 graded rows were emitted for it, 4 of them successes.
+
+## The control rules out a global outage
+
+| posteriors updated | rows |
+|---|---|
+| 2026-09-05 | 317 |
+| 2026-09-06 | 429 |
+| **2026-09-07** | **873** |
+| 2026-09-08 | 27 |
+
+The learner is alive and updating hundreds of rows a day. The freeze is **specific to the arm whose
+grade was corrected**.
+
+## What this means
+
+`28de0e8` is landed, deployed, byte-correct, and verified at the emission site — the trace now
+carries an honest `success` keyed to `new_git_sha`, and Addendum 18 measured that change (80
+successes with zero landings before, 4 with 4 real landings after). **All of that is true and none
+of it reaches the learner.** Nothing propagates the corrected grade from the trace into
+`context_thompson_scores` for this arm.
+
+So the arm still believes it succeeds ~70% of the time while its measured landing rate is ~15%, and
+it will keep believing that regardless of what the traces now say.
+
+This is the pasted capstone's item 1, sharpened by measurement: my earlier claim that
+"grade means landing — done" was wrong at the layer that matters. Correcting *what is written* did
+not correct *what is learned*. The reward key still points wherever it pointed on 09-06, because the
+posterior is not reading the corrected signal at all.
+
+**The honest ceiling on today's three landed fixes:** two of them (the spec-refine guard, the
+environment label) act on execution and were verified by behaviour change. The third acts on the
+learning signal and is inert. Landing is not working, and *measured effect at the emission site* is
+not effect at the learner — a third distinct layer that this session's verification discipline had
+not separated until now.
+
+**This is precisely the loop the system should be able to run unaided:** dispatch a fix, observe the
+consequence, discover the fix is inert, and file that. Every step of it was operator-driven.
