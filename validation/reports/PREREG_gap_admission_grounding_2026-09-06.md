@@ -1236,3 +1236,71 @@ guard (`64968c1`, 15 refinements → 0), and this one. Ten substrate-authored co
   landings non-deterministic.
 - The **admission prose-scan** fix is gone — it was live in the mirror, tracked in no repository, and
   erased by pull-sync exactly as predicted.
+
+---
+
+# Addendum 19: the 401 storm — measured, bounded, and root-cause NOT established
+
+## Two different 401s, only one of which matters
+
+- **Anthropic `authentication_error`** — 1–4 per hour, flat all day, against **330 successful LLM
+  completions in the last hour**. Failover covers it. Chronic, minor, not the incident.
+- **Identity vessel rejections** — accelerating: **2 → 276 → 872 → 1,226 per hour** from 21:00.
+  Identity's own access log shows **22 rejections against 167 successes in 20 minutes (12%)**.
+
+## It is load-bearing
+
+`auth.ts` classifies a 401 as `transient: false`, so the request is **denied, never retried**. The
+denied routes are core loop traffic:
+
+| route | count (25 min) |
+|---|---|
+| `GET /v2/activities/templates?limit=100` | 29 |
+| `POST /v2/activities/execution-traces` | 26 |
+| `POST /v2/events/publish` | 25 |
+
+**57 execution-trace writes were denied in one hour.** The trace store is therefore lossy right now,
+which means every count taken from it today — including the grading measurements in Addendum 18 — is
+an undercount of unknown size. One downstream failure is already in the log:
+`[retire-sweep] template listing HTTP 401 at offset 0 — sweeping only what was fetched`.
+
+## What it is not — ruled out by measurement, not assumption
+
+- **Not a bad service key.** All five configured keys (`METABOB`, `GOAL_HOST_VESSEL`,
+  `LOCAL_TOOLS_VESSEL`, `RIBOSOME_VESSEL`, `CONCEPT_DB`) are byte-identical, 160 chars.
+- **Not intermittent rejection of a valid key.** That key resolved **200 on 30 consecutive
+  attempts**.
+- **Not a missing credential.** Controlled experiment: a request with no auth header returns 401 to
+  the caller and produces **zero** identity warnings — activity-api rejects it before calling
+  identity. My "empty credential" hypothesis was refuted by its own control.
+
+## What it is — established by controlled experiment
+
+A request carrying a **present but unknown** credential produces 401 plus **exactly one** warning:
+
+| request | caller sees | identity warnings |
+|---|---|---|
+| no credential | 401 | 0 |
+| bogus `ApiKey mb-notarealkey…` | 401 | 1 |
+
+So all ~1,200/hour are callers presenting a credential identity does not recognise. Identity logs no
+`user_id` for them, and rejects in 3ms.
+
+## Why the caller cannot be named — the filed defect
+
+The rejection log records `url` and `status` only, never *what* was rejected. A failure occurring
+twenty times a minute is unattributable by construction. Filed as
+`the-identity-rejection-log-never-records-which-credential-was-rejected`, grounded, single op: add a
+3-character prefix and the length to that existing warning. Prefix leaks nothing — every valid key
+shares it — while length and prefix together discriminate the remaining possibilities.
+
+**Pre-registered prediction:** once it lands, the field will show either `eyJ` (a JWT presented where
+an API key is expected — six unauthenticated WebSocket clients are connected) or a `mb-` key of
+length 160 that identity nonetheless refuses, which would mean a second key exists outside
+`/etc/substrate/env`.
+
+## Unexplained and deliberately not claimed
+
+`identity-vessel` has been running since **2026-08-27 — 11 days without restart**, while activity-api
+restarted 8 times in the onset hour. That is the most conspicuous asymmetry around the 21:00 onset
+and it is **not** established as causal.
