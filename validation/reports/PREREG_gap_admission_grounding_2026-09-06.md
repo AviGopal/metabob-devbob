@@ -1466,3 +1466,48 @@ Item 2 is the general defect and item 1 is one instance of it. Any arm whose sig
 goes silently un-credited and reports full success while doing so — and the only way I found this was
 by checking the row rather than believing the log line. **A channel's own reporting is not evidence
 about the channel**, for the fourth time this session.
+
+---
+
+## Addendum 22 — what deployed at 10:42: the killer commit found, and the restore filed
+
+**The regressing change is `3d648ad` in goal-host-vessel** — substrate-authored, landed
+2026-09-06 10:42:00 UTC, deployed by the goal-host restart at 10:42:33. One line: the edit-intent
+satisfier trace switched from its own id namespace (`feature_compose:<sha>`) to reusing the engine's
+`exec_…` execution_id. The bracket closes exactly: last signed execution 10:42:05, restart 10:42:33,
+first null row 10:43:16.
+
+**Mechanism, read at the consuming layer.** The signed rows were never written by the thin
+`POST /executions` path at all — they are a different record entirely (26 fields vs 15, two
+writers). The rich trace flows goal-host → `TranslatingTraceSink` → `POST
+/v2/activities/execution-traces`, where the receiver derives the v1 state-space signature from the
+trace's input shapes at INSERT time and grades with it. After `3d648ad`, the rich trace arrives
+carrying an id that the thin row already occupies; the authoritative store is an INSERT whose
+duplicate error is deliberately mapped to an idempotent 200. The sender sees success. The only
+record carrying the shapes the signature is derived from is discarded.
+
+**The last graded execution was the one that landed the regression.** The final signed row is
+`execution:⟨feature_compose:3d648ad…⟩` — the compose run that landed the killer commit was the last
+ever credited, 1.6 seconds before the posterior froze. The change was aimed at joining the reach
+verdict to the engine's execution record; that intent is now served by the emitter +`2f01007`
+(both landed 2026-09-08), so the id unification is no longer load-bearing — today its only effect
+is deleting the learning signal it meant to improve.
+
+**Restore filed:** `restore-the-satisfier-trace-id-namespace-so-the-signature-lands-again` — a
+verbatim one-line revert, anchor verified unique in goal-host `origin/dev` (line 12449), class1
+falsifier. First filing under a different id was created by the store and then vanished within
+seconds (probe gaps `heal-probe`/`placeholder-scrub-probe` were being written in the same second;
+the `{{…}}` scrub is timestamp-only, so the deletion path is unidentified — noted, not diagnosed).
+Re-filed under a new id per standing law; second write persisted and re-read cleanly after 5s.
+
+**Pre-registered expectations once the revert lands and goal-host restarts:**
+1. New rich rows appear under `execution:⟨feature_compose:<sha>⟩` with `signature` populated
+   (`57cffe5dcd63b199` for the standard edit-intent context).
+2. `feature_compose`'s `last_updated_at` advances for the first time since 2026-09-06T10:42:06.
+3. Direction: β rises faster than α (measured landing rate 0.154 vs implied 0.699), so the
+   posterior mean falls toward the real rate. History will NOT backfill — every skipped row is
+   already stamped `reach_graded:true`.
+4. If rows appear signed and the posterior still does not move, the defect is in
+   `applyOutcomeToPosteriors` below the guard, and the silent-discard gap
+   (`a-non-zero-posterior-delta…`, which the system has already narrowed on its own) becomes the
+   binding item.
