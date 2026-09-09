@@ -87,11 +87,29 @@ Executions exist; counters and posterior are frozen at the uninformed prior. Thr
 of the five carry `reached: null` — never graded at all. The arm cannot learn from
 its own history.
 
-## Finding 3 — a supplied falsifier is discarded
+## Finding 3 — a supplied falsifier is discarded — ⚠ RETRACTED 2026-09-09
 
-The gap was filed twice with `edit_site` and `expected_literal` set (Class 1b), and
-the store stamped `falsifier: "none"` both times. `classifyFalsifier` does not read
-those fields. Current coverage on the gap store: `none: 637`, `unstamped: 163`,
+**The conclusion below is wrong and the cause is now known.** `classifyFalsifier`
+reads those fields fine. What discarded them was the **write path**:
+`gapFromFlatPointer` returns only seven fields and drops `classification_metadata`
+entirely, and MCP `resolve_impulse` merges its pointer **flat**. So the predicate
+never reached the classifier.
+
+Controlled contrast, identical gap content, same session:
+
+| write form | result |
+|---|---|
+| flat `{id, edit_site, expected_literal, …}` | `falsifier: "none"` |
+| nested `{gap: {…, classification_metadata: {edit_site, expected_literal}}}` | **`falsifier: "class1"`** |
+
+The gap `liveshapes-ignores-activity-output-shapes` now carries a real class-1
+predicate. The original error was mine: I read a `none` stamp as evidence about the
+classifier without testing the path the data took to reach it — blaming the reader
+for what the writer destroyed.
+
+**Superseded text follows.** The gap was filed twice with `edit_site` and
+`expected_literal` set (Class 1b), and the store stamped `falsifier: "none"` both
+times. `classifyFalsifier` does not read those fields. Current coverage on the gap store: `none: 637`, `unstamped: 163`,
 `class1: 4`, `class2: 8`, `unresolvable: 3` — supplying a predicate by hand does not
 escape the 637.
 
