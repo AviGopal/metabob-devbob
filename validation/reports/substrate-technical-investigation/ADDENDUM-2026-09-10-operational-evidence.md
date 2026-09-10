@@ -1856,6 +1856,26 @@ is in. Target inference should do the same. That is the fix, it is local, and it
 does not depend on the credit problem being solved first — it converts a silent
 85% failure into a visible one.
 
+### RETRACTED — the LLM is healthy; see §R
+
+**The credit-exhaustion root cause stated above is WRONG and is retracted.**
+It was tested and refuted within the hour. A direct probe of llm-resolver
+returned `HTTP 200` with content `OK` (via a `google/gemini-2.5-flash`
+fallback): the LLM is reachable and answering. The 402s are real but the
+resolver falls back past them.
+
+The refutation came from a fix I dispatched *because of* this section. I landed
+a diagnostic on the `if (!r.ok) return empty;` transport branch (`978fc40`,
+verified live at line 757), restarted goal-host, and dispatched a goal that
+produced a 0-step termination — **and the diagnostic never fired.** `r.ok` was
+true. The failure is not on that branch, and inference never reaches the LLM at
+all. §R has the actual cause.
+
+Retained above as written, because the reasoning failure is the point: a
+plausible mechanism (402s are real, and the docstring's failure value matched
+the logged value exactly) was assembled from two true facts into a false chain,
+and only an instrument placed on the specific branch could tell them apart.
+
 ### What this changes about the ~90% expectation
 
 CLAUDE.md states reach failures are *information-availability* failures and that
@@ -1866,6 +1886,84 @@ distinguish that from the goal being unaimable. **The measured 10–18% is not a
 capability ceiling; it is, right now, a proxy for LLM availability.** Any
 capability claim — in either direction — computed over this window is measuring
 the provider account, not the substrate.
+
+---
+
+## R. The actual root cause: no vessel has an API key
+
+**Status: runtime-demonstrated. Confidence HIGH.**
+
+```
+$ tr '\0' '\n' < /proc/$(systemctl show goal-host-vessel -p MainPID --value)/environ | grep '^API_KEY='
+(nothing — keylen=0)
+
+$ grep -cE '^API_KEY=' /etc/substrate/env
+0
+```
+
+**`API_KEY` is absent from `/etc/substrate/env` entirely, and no vessel has
+one** — goal-host, development-vessel, activity-api and discovery-vessel all
+report `keylen=0`. Verified at the layer that consumes it (`/proc/<pid>/environ`),
+not at the file.
+
+### The chain
+
+1. `fetchKnownShapes` calls discovery for the advertised-shape vocabulary,
+   sending `Authorization: ApiKey ` with an empty key.
+2. Discovery answers **401** (confirmed by replaying goal-host's own credential:
+   `HTTP 401 INVALID_API_KEY`).
+3. `fetchKnownShapes` handles it as `if (!r.ok) return knownShapesCache?.shapes ?? [];`
+   — **silently returns an empty vocabulary.**
+4. `inferGoalTargetDecision` opens with
+   `if (!goal || knownShapes.length === 0) return empty;` — it returns **before
+   any LLM call**, which is precisely why the diagnostic landed in §Q never
+   fired and why the LLM probe came back healthy.
+5. Every deterministic fallback in the cascade at line 430
+   (`deterministicCompositionAsk`, `deterministicEnvGateRoute`,
+   `deterministicRegistryRoute`, `namedAdvertisedShape`) is guarded by
+   `knownShapes.includes(...)`, so an empty vocabulary disables **all** of them
+   too. The cascade falls through to `{ shapes: [], confidence: 0 }`.
+6. Empty target → `0-step termination` → no trace → no `executionId` → no reach
+   verdict → no oracle label → no `goal_execution_paths` row.
+
+That is §O's dark oracle, §P's `error: None`, and §Q's empty inference — one
+cause. It also explains why goal-host is **not registered in discovery** (it
+cannot authenticate to register) and why the MCP cockpit fails with *"could not
+find goal-host-vessel via discovery."*
+
+### Residual uncertainty, stated rather than smoothed over
+
+23 of 159 inferences in 24h were **non-empty**, which an always-empty vocabulary
+does not explain. Candidates: `knownShapesCache` populated before the key went
+missing and since expired, or callers that pass `knownShapes` explicitly. This
+is not resolved, and the chain above should be read as the dominant cause, not
+the only one.
+
+### Why this was hard to see, and it is the same reason as everything else
+
+Every link fails **silently and looks like absence**: an empty key produces a
+401 that produces an empty list that produces an empty target that produces a
+0-step walk that produces no trace. At no point does anything report an error —
+the dispatch record's `error` field is `None`. A missing credential is rendered
+as "this goal has no inferable target."
+
+This is the ninth instance today of the session's one real finding, and the most
+consequential: **the substrate cannot distinguish "I could not ask" from "there
+is nothing there," and that single confusion is currently costing it ~85% of its
+goals.**
+
+### What the ~90% expectation actually means right now
+
+The measured 10–18% is not a capability ceiling and — contra §Q — not a proxy
+for LLM availability either. **It is very largely a proxy for one unset
+environment variable.** Capability claims computed over this window, in either
+direction and including every number quoted earlier in this addendum, are
+measuring a broken bootstrap.
+
+Restoring `API_KEY` is an operator action (law 1 puts credentials squarely in
+the bootstrap tier). What it is **not** is a substrate capability limit, and the
+correct next measurement is to restore it and re-measure reach before drawing
+any conclusion about whether the system learns.
 
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
