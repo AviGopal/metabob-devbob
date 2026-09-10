@@ -52,8 +52,24 @@ const sqlAuth = "Basic " + Buffer.from(`${USER}:${PASS}`).toString("base64");
 
 /** Probe traffic is excluded from fleet metrics by THIS tag, not by a staging copy. */
 const PROBE_TAG = "learning-loop-selftest";
+/** Goal-host is the only surface that turns a dispatch into a TRACED execution. */
+const GOAL_HOST = process.env["GOAL_HOST_VESSEL_URL"] || "http://127.0.0.1:8210";
+/**
+ * Pinned so the probe RUNS rather than being sampled. Thompson selection is the
+ * machinery under test; letting it choose the probe would make a green run depend
+ * on the very selector the run is meant to grade.
+ */
+const PROBE_TEMPLATE_ID = process.env["SELFTEST_PROBE_TEMPLATE_ID"] || "development-vessel:gate-self-probe-tick";
 /** How long to wait for the probe's execution row to appear. */
 const SETTLE_MS = 45_000;
+/**
+ * How far back to look for the probe's own executions. Sized to comfortably span
+ * several cycles of the probe's timer, so a single skipped tick does not read as a
+ * severed chain. Too short and the selftest reports a false RED; too long and it
+ * would keep reporting GREEN off a stale execution after the chain had actually
+ * broken, so this is the one constant here with a real tension in both directions.
+ */
+const LOOKBACK_MS = 90 * 60 * 1000;
 /** Non-probe arms sampled for the confinement assertion. */
 const CONFINEMENT_SAMPLE = 25;
 
@@ -206,15 +222,38 @@ async function main(): Promise<void> {
   // corpus the design document asks for: hostile/benign fixture pairs run through
   // the real gate functions, so its outcome is known by construction and needs no
   // model to judge. Reuse before mint — no new probe shape is required.
+  //
+  // DISPATCH AS AN ACTIVITY EXECUTION, NOT AS A RAW RESOLVE (2026-09-10).
+  // The first live run of this selftest came back RED on trace_write while
+  // goal_path was GREEN, which is not a shape a severed trace-writer can produce.
+  // The cause was this dispatch: it POSTed the shape to development-vessel's
+  // /v2/impulses/resolve, which invokes the RESOLVER directly. A resolver call is
+  // not an activity execution — it never enters the executor, so it writes no
+  // `execution` row. The harness then asserted that an `execution` row existed.
+  // That is the same defect this file exists to catch, committed by the file
+  // itself: asserting at a layer the action never reaches. Route through
+  // goal-host with an explicit target_template_id so Thompson selection is
+  // bypassed (the probe must run, not be sampled) and a real traced execution is
+  // produced. Fall back to the resolver path only if goal-host is unreachable, and
+  // say so — a probe that silently degrades to an untraced call would re-create
+  // exactly the false RED that motivated this comment.
   let dispatched = false;
   try {
-    const resp = await fetch(`${DEV}/v2/impulses/resolve`, {
+    const resp = await fetch(`${GOAL_HOST}/run-goal`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(API_KEY ? { Authorization: `ApiKey ${API_KEY}` } : {}) },
-      body: JSON.stringify({ impulse: { type: "gate_self_probe", operator: PROBE_TAG, probe_tag: PROBE_TAG } }),
+      body: JSON.stringify({
+        target_template_id: PROBE_TEMPLATE_ID,
+        goal: `${PROBE_TAG}: exercise the execution→learning chain with a known-answer gate probe`,
+        tags: [`operator:${PROBE_TAG}`, PROBE_TAG],
+        variables: { probe_tag: PROBE_TAG, operator: PROBE_TAG },
+      }),
       signal: AbortSignal.timeout(120_000),
     });
     dispatched = resp.ok;
+    if (!resp.ok) {
+      console.error(`[selftest] goal-host dispatch answered http ${resp.status} — the probe did not run as a traced execution`);
+    }
   } catch (err) {
     console.error(`[selftest] probe dispatch failed: ${(err as Error).message}`);
     process.exit(1);
@@ -227,7 +266,25 @@ async function main(): Promise<void> {
   await new Promise((r) => setTimeout(r, SETTLE_MS));
 
   // d'...' datetime literals: a bare string comparison silently matches everything.
-  const since = startedAt.toISOString();
+  // OBSERVE THE PROBE THAT ALREADY RUNS; DO NOT INSIST ON HAVING CAUSED IT.
+  // Two dispatch routes were tried and neither triggers this probe on demand: a
+  // raw /v2/impulses/resolve invokes the resolver without entering the executor
+  // (no execution row at all), and goal-host accepts a pinned
+  // target_template_id with 202 running and then executes nothing — the
+  // pin-by-template-id path does not reach this template. Meanwhile
+  // development-vessel:gate-self-probe-tick DOES execute, repeatedly, on its own
+  // timer. Asserting only on executions this process caused therefore reports RED
+  // for a chain that is conducting fine, which is a false alarm and the worst
+  // failure mode a watchdog can have.
+  //
+  // So window on the probe's OWN cadence instead. This is strictly better than
+  // dispatching: it adds no probe traffic to the fleet (the footprint concern that
+  // shaped the timer interval), and the probe's outcome is still known by
+  // construction because it is the same fixture-driven activity either way. The
+  // cost is that a silent probe is indistinguishable from a silent chain — which
+  // is why absence of any probe execution in the window must read UNTESTED, never
+  // green and never red. That distinction is asserted by the offline controls.
+  const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
   const res = await sql(
     `SELECT activity_id, executed_at, metadata FROM execution WHERE executed_at > d'${since}';\n` +
       `SELECT count() AS n FROM goal_execution_paths WHERE last_executed_at > d'${since}' GROUP ALL;\n`,
