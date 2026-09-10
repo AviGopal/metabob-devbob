@@ -1777,5 +1777,95 @@ logs in §O, the session's dominant methodological finding stands: **in this
 system, "zero" is the default return for asking wrongly, so a zero is a claim
 about the question until the raw response has been read.**
 
+---
+
+## Q. Root cause: reach is gated at step zero
+
+**Status: code- and log-demonstrated. Confidence HIGH.**
+
+§P found the walk dying before selection with no recorded reason. There *is* a
+reason; it is logged, and it is the same one every time. Over 12 hours, **85
+lines, 100% identical**:
+
+```
+[goal-host-vessel] walk(...): 0-step termination —
+  opportunistic walk found no applicable pick (empty inferred target)
+```
+
+The goal→target-shape inference returns nothing:
+
+```
+target inference {"goal_hash":"285c63b8","inferred_target_shapes":[],
+                  "confidence":0,"alternatives":[]}
+```
+
+Over 24 hours: **136 empty against 23 non-empty — 85.5% of goals never receive a
+target shape at all.** Non-empty results do occur (`["pull_cutover"]`,
+`["source_code","code_modification_proposal","fileWriteResult"]`), so this is
+degradation, not a dead function.
+
+**The 14.5% that succeed sits inside the 10–18% band that five independent
+reach metrics converged on this session.** That is not proof of identity, but it
+strongly suggests reach is very largely decided at the *first* step — before any
+activity is selected, any resolver runs, or any commit is attempted. Every
+downstream explanation offered in this addendum, including §O's finding that
+96.2% of reach failures are `edit-intent-no-landed-edit`, describes the
+behaviour of the minority of goals that got past inference.
+
+### Why it returns empty
+
+`inferGoalTargetShapes`
+(`repos/goal-host-vessel/src/goal-target-inference.ts`) is LLM-backed, and its
+own docstring at line 212 says:
+
+> Returns `{ shapes: [], confidence: 0, alternatives: [] }` on any failure.
+
+Which is exactly the logged value, `confidence: 0` included. And the LLM
+providers are failing: **40 `402 status code (no body)`** — payment required —
+**plus 27 `429`** rate-limits in a two-hour window, and 38 `all endpoints
+exhausted` lines in twelve hours.
+
+### Two problems, and only one of them is the substrate's
+
+**(1) An operator blocker.** LLM provider credit and quota exhaustion is
+precisely what CLAUDE.md means by an intractable blocker: the substrate cannot
+fund its own API keys. No amount of coaxing closes this, and it is the immediate
+cause of today's collapse.
+
+**(2) A design defect that survives paying the bill.** A *failed* inference and
+a genuinely *un-inferable* goal return the identical value. The walk cannot tell
+"I could not ask" from "there is no target", and neither can any downstream
+reader — which is why §P saw `error: None` and why the reach oracle went dark
+rather than recording 85 honest failures.
+
+This is the same class as every other finding today: the silent `null` in
+`getTemplate`, the skip-only posterior log, the FAIL-only compose log, the three
+false zeros. **Failure rendered indistinguishable from absence.**
+
+### The correct handling already exists, one file over
+
+The sibling deliverable-shapes lookup in `index.ts` (~line 5078) gets this
+exactly right, and says so in prose:
+
+> a failed lookup is not evidence of absence — keeping *last known-good
+> vocabulary* / *EMPTY vocabulary (no cache yet); the walk is narrower than the
+> substrate*
+
+It distinguishes the two cases, keeps a last-known-good, and names which case it
+is in. Target inference should do the same. That is the fix, it is local, and it
+does not depend on the credit problem being solved first — it converts a silent
+85% failure into a visible one.
+
+### What this changes about the ~90% expectation
+
+CLAUDE.md states reach failures are *information-availability* failures and that
+"everything needed is already in the code, the specs, and the concept graph."
+Today that is literally true and literally the problem: the information needed
+to aim a goal is behind an LLM call that is returning 402, and the code cannot
+distinguish that from the goal being unaimable. **The measured 10–18% is not a
+capability ceiling; it is, right now, a proxy for LLM availability.** Any
+capability claim — in either direction — computed over this window is measuring
+the provider account, not the substrate.
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
