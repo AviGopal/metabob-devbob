@@ -1965,5 +1965,86 @@ the bootstrap tier). What it is **not** is a substrate capability limit, and the
 correct next measurement is to restore it and re-measure reach before drawing
 any conclusion about whether the system learns.
 
+---
+
+## S. The repair: a rotation whose re-issue never ran
+
+**Status: executed and behaviourally verified.**
+
+Section R named an unset `API_KEY` as the cause. That was half right. The full
+cause: **every per-vessel API key in the fleet was revoked**, because the shared
+signing secret was rotated and the re-issue step `gen-env.sh` explicitly warns
+about ("keys are forgeable until you set a strong secret and re-issue them")
+never ran. The env still carries the previous, insecure default alongside the
+new strong value, so the rotation itself is visible in the environment.
+
+### The lockout
+
+The admin credential was empty, so `substrate-key issue|list|revoke` all failed
+with *"requires admin entitlement"*. **The only credential that could mint a
+replacement was the missing one.**
+
+The remedy exists: `ensureAdminKey`, an additive fail-open backfill, landed in
+`scripts/substrate/seed-identity.ts` as commit `9069838e` on 2026-08-26. But the
+running image ships the **pre-fix seeder** — `/vessels/seed-identity.ts` is dated
+Aug 21 and contains **0** occurrences of `ensureAdminKey`; the repo copy contains
+**3**. A landed-but-undeployed fix for the exact lockout that was live. Running
+the current seeder from the container's own checkout reported that it had
+backfilled the admin credential, which had been unreachable.
+
+Note what that same run reported one line earlier: *"existing key authenticates
+— nothing to re-issue."* It validates the **fleet bootstrap** credential, which
+was fine, and never checks the per-vessel ones — so the seeder's own health
+check could not see the outage it was standing in.
+
+### What was done
+
+Four credentials issued (goal-host, local-tools, ribosome, concept-db), **each
+verified against discovery before being wired in** (HTTP 200 with the registry,
+versus 401 for the one it replaced), the env file backed up before each edit,
+four vessels restarted. Rollback is one revoke plus one file restore.
+
+### Measured before and after
+
+| | before | after |
+|---|---|---|
+| target inference | `{shapes:[],confidence:0}` — 85.5% of calls | `["shellResult"]` @0.6, `["llm_completion_dispatch"]` @0.7 |
+| 0-step terminations | 85 in 12h — **100% of walks** | **0** |
+| auth failures | ~60/min sustained 48h+ | **1/min** |
+| `auth_resolve_v1` churn | ~120/min | 21/min, decaying |
+| `selectedTemplateId` | `None` on every dispatch | `satisfier:shellResult`, `ribosome-extract`, … |
+| reach oracle | silent 21h | writing; first new row **`achieved`** |
+
+The corpus gap is stark: `2026-09-09T16:09:59` then nothing until
+`2026-09-10T13:48:31`, and the first verdict after it is
+`deterministic:verified-registry-count — independently queried …`, an *achieved*
+reached by recomputation rather than assertion.
+
+Negative control: the same four units were already failing before any change
+(`bootstrap-seeder`, `concept-db-seeder`, `development-vessel-seed`,
+`spectral-gap`). No new failures.
+
+### What this does and does not establish
+
+It establishes that the mechanism driving reach to zero is gone and that the
+instrument measuring reach is alive. It does **not** establish a reach rate.
+
+Yesterday's 10–18% is **void** — not a baseline, not a ceiling. It was measured
+over a fleet whose walk could not take a single step, and every capability claim
+in this addendum computed over that window is measuring a broken credential
+rotation rather than a substrate. A real rate requires ordinary traffic through
+the restored path, over hours, and cannot be asserted from a handful of
+operator-authored probes.
+
+### The lesson, which is the whole session in one line
+
+Nine subsystems today rendered failure as absence: a silent `null`, a skip-only
+log, a FAIL-only log, three false zeros, an empty vocabulary, an empty inferred
+target, and a dispatch record whose `error` field read `None` at the end of a
+48-hour credential outage. **The substrate could not distinguish "I could not
+ask" from "there is nothing there" — and that single confusion hid a dead fleet
+credential behind a plausible story about capability.** Every metric in this
+investigation, including the headline reach number, was downstream of it.
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
