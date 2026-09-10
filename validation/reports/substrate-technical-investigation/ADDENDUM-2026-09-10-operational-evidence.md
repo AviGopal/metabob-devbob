@@ -1605,5 +1605,87 @@ the "when a success counter reads 0, read the failure counter" law fired. The
 generalisation: **a rate computed from log lines is a claim about the logging
 until you have read the emitter.**
 
+---
+
+## O. Reach decomposed: one reason code, and a dark oracle
+
+**Status: code- and store-demonstrated. Confidence HIGH for the decomposition
+and the outage; the cause of the outage is UNKNOWN.**
+
+The reach *rate* has been measured five ways in this session. The reach
+*failures* had never been decomposed. Over `goal_verification_labels`,
+2026-09-03 → 2026-09-09T16:09, deterministic labeler, **n = 1047 not_achieved**:
+
+| share | reason code |
+|---|---|
+| **96.2%** (1007) | `deterministic:edit-intent-no-landed-edit` |
+| 1.1% (12) | `code-investigation-citation-unverified` |
+| 0.9% (9) | `hollow_walklog_capped` |
+| 0.8% (8) | `code-investigation-uncited` |
+| ≤0.4% each | staged-not-landed, unmeasurable-count, wrong-git-commit-count, … |
+
+**Reach failure is not diffuse. It is one class.** An edit goal is scored
+reached only by an edit-result shape carrying landing evidence
+(`push_status:pushed` / `new_git_sha`), so the reach figure is very largely the
+compose funnel's landing rate wearing a different name. The ~90% expectation and
+the ~12.5% landing rate are therefore not two problems to solve but one.
+
+Over the same window the labelers disagree sharply: deterministic **46/1093
+achieved (4.2%)**, human **6/11**. Small human n, but the gap is large enough to
+be worth a controlled comparison rather than an assumption about which is right.
+
+### The oracle is dark
+
+The corpus is frozen. Newest label `2026-09-09T16:09:59`, ~21 hours stale.
+Journal lines containing `deterministic:` — **132 over 36h, 46 over 24h, 0 over
+12h, 0 over 3h**. `/reach` grader hits: 5 in 24h, **0 in 12h**. Traffic did not
+stop: 159 substrate-authored commits landed in the window and two operator
+dispatches ran today, one of which landed `939bb55`.
+
+Consequence: **every reach figure quoted for the last 12–21 hours is computed
+over a frozen corpus.** `reach_history` for week `2026-09-07` was updated
+2026-09-10T12:40 with `total=1233, reached=0` — totals still accrue while
+`reached` cannot move. That 0% is an outage, not a capability measurement.
+(`reach_history` is independently unusable: one row carries no `week` at all,
+and week `2026-08-17` records `total=414944`.)
+
+Cause **unknown**. Ruled out: goal-host `e673b34`, the last commit before the
+stop, touches only `src/registry-field.ts`. Tested and refuted: the hypothesis
+that edit-intent routing to `feature_compose` short-circuits the oracle — a
+dispatched *non-edit* probe goal also produced no deterministic verdict.
+
+### The detector I shipped cannot see this
+
+`validator-liveness` (2026-09-09) is alive and working — it ran 44 minutes ago
+and reports `SEVERED 38/49`. It is nonetheless structurally blind here: it flags
+validators that stopped keeping their own **cadence**, and the reach oracle is
+**demand-driven** — it fires per dispatch, has no interval, and so can never be
+late. A demand-driven validator needs a different predicate: *N qualifying
+inputs arrived and produced M verdicts; M/N collapsed* — not *it missed its
+interval*. That is the law-6 recursion applied to my own detector.
+
+### The failure-branch-only log, for the third time today
+
+In the same 60 minutes activity-api logged **4028 `posterior variant update
+SKIPPED`** events (3880 `reach_ungraded`) and **zero applied events**. Read
+naively: learning has stopped.
+
+It has not. `posterior-update.ts` logs **only the skip branch** — there is no
+applied line — so the zero is a fact about the logging. Measured at the store,
+`variant_performance_metrics` shows **41 arms updated in that hour** (154/24h,
+530/72h, of 4603). Learning is proceeding.
+
+Two further items, each its own defect: **96% of those 4028 skips (3862) are a
+single activity, `auth_resolve_v1`, firing roughly once per second** — the skip
+log is dominated by one retry storm and is not a measure of loop health; and a
+log that emits only on the failure branch cannot be used to compute a rate.
+
+That last point is now the session's dominant pattern. It appeared three times
+today in three unrelated subsystems — `patch-with-tools.ts` (logs `FAIL`, no
+success), `posterior-update.ts` (logs `SKIPPED`, no applied), and
+`ActivityApiTemplateProvider.getTemplate` (returns `null`, logs nothing). Each
+time, the missing branch made a healthy mechanism look dead. **A rate computed
+from log lines is a claim about the logging until the emitter has been read.**
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
