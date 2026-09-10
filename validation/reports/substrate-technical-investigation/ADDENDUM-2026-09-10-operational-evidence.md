@@ -1584,9 +1584,21 @@ absence of a success line is evidence about the logging, not about the lane.
 
 Measured at the layer that consumes a land instead — git — there are **159
 substrate-authored commits** in the same window (development-vessel 145,
-goal-host-vessel 13, boredom-vessel 1). The lane lands constantly.
-`ias-executor-ts` has **0**, which is consistent with this section's finding but
-is not established by it.
+goal-host-vessel 13, boredom-vessel 1). **The system lands constantly; that
+tally says nothing lane-specific.** Both `feature_compose` and
+`patch_with_tools` land through the same mitosis cutover under the same gap id,
+and the commit subjects carry only the gap-id lane (`route-edit` 70, `recommit`
+16, `…-compose-report` 11, the rest one-offs) — which is a different partition
+than the one in question. A `patch_with_tools`-specific land rate is **not
+measurable from either source**: the resolver logs no success, and the commit
+does not name the resolver.
+
+`ias-executor-ts` has **0** commits in the window, consistent with this
+section's finding but not established by it.
+
+That last correction is the section's own thesis applied to the section: the
+first draft of this paragraph read "the lane lands constantly," attributing an
+all-lane count to one lane. Same error, one layer up.
 
 This is the same error as the other five, caught one step earlier only because
 the "when a success counter reads 0, read the failure counter" law fired. The
