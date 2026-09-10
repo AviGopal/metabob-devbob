@@ -131,7 +131,20 @@ export function evaluate(e: Evidence): Assertion[] {
       ? "no posterior row for the probe's arm: the execution produced no belief to update"
       : moved > 1e-9
         ? `probe arm moved Δα=${(d.alphaAfter - d.alphaBefore).toFixed(4)} Δβ=${(d.betaAfter - d.betaBefore).toFixed(4)}`
-        : "probe arm posterior did NOT move: the trace landed and the verdict landed and the belief did not change — the junction between them is severed",
+        // A DETERMINISTIC PROBE IS *SUPPOSED* TO MOVE NOTHING (2026-09-10).
+        // posterior-update.ts skips the write when tierClass === 'all_deterministic':
+        // an arm with no stochastic choice has nothing to learn, so the skip is the
+        // design working. Measured for this probe: reach_verdict "reached",
+        // alpha_delta 0.8046, beta_delta 0.1954 — the verdict AND the deltas were
+        // computed, then deliberately not applied. Reporting "the junction is
+        // severed" there is a false alarm, the worst thing a watchdog can emit.
+        // Distinguish using evidence already in hand: if the verdict WAS delivered
+        // (gradedCount > 0) and the arm still did not move, a structural skip is the
+        // likely cause and the honest reading is UNTESTED, not severed. Only when the
+        // verdict never arrived either is severance the right accusation.
+        : e.gradedCount > 0
+          ? "probe arm posterior did not move, but its verdict WAS delivered — consistent with the all_deterministic skip in posterior-update.ts, which declines to write a belief for an arm with no stochastic choice. This link is UNTESTED by this probe, not severed; grading it needs a STOCHASTIC probe arm."
+          : "probe arm posterior did NOT move and no verdict was delivered either: the belief junction is severed",
   });
 
   out.push({
@@ -286,7 +299,7 @@ async function main(): Promise<void> {
   // green and never red. That distinction is asserted by the offline controls.
   const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
   const res = await sql(
-    `SELECT activity_id, executed_at, metadata FROM execution WHERE executed_at > d'${since}';\n` +
+    `SELECT activity_id, executed_at, metadata, tags FROM execution WHERE executed_at > d'${since}';\n` +
       `SELECT count() AS n FROM goal_execution_paths WHERE last_executed_at > d'${since}' GROUP ALL;\n`,
   );
   const recent = rowsOf(res, 0);
@@ -295,9 +308,20 @@ async function main(): Promise<void> {
     const meta = JSON.stringify(r["metadata"] ?? {}).toLowerCase();
     return a.includes("gate") && a.includes("probe") || meta.includes(PROBE_TAG);
   });
+  // THE GRADING MARKER IS A TAG, NOT A METADATA FIELD (2026-09-10).
+  // This previously tested metadata.reach_graded === true || metadata.reached !==
+  // undefined. NEITHER KEY EXISTS on an execution row. Measured: 0 of 936
+  // executions in a 2-hour window carried metadata.reach_verdict, and the real
+  // metadata keys are activity_type / dispatch_id / gap_id / outcome / route /
+  // push_status / new_git_sha and friends — no grading field among them. The
+  // marker lives in `tags`: rows carry "reach_graded:true" and "reached:true" /
+  // "reached:false". So this assertion reported verdict_delivery RED against a
+  // field that was never written, on a chain that was grading correctly. A wrong
+  // field name returns empty rather than erroring, which is the single most
+  // common way an instrument in this system lies.
   const gradedCount = probeExecutions.filter((r) => {
-    const m = (r["metadata"] ?? {}) as Record<string, unknown>;
-    return m["reach_graded"] === true || m["reached"] !== undefined;
+    const tags = Array.isArray(r["tags"]) ? (r["tags"] as unknown[]).map((t) => String(t)) : [];
+    return tags.some((t) => t === "reach_graded:true" || t.startsWith("reached:"));
   }).length;
   const goalPathRows = Number((rowsOf(res, 1)[0] ?? {})["n"] ?? 0);
 
