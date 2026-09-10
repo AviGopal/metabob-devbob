@@ -1687,5 +1687,95 @@ success), `posterior-update.ts` (logs `SKIPPED`, no applied), and
 time, the missing branch made a healthy mechanism look dead. **A rate computed
 from log lines is a claim about the logging until the emitter has been read.**
 
+---
+
+## P. Why the oracle is dark: the walk dies before selection
+
+**Status: store- and runtime-demonstrated. Confidence HIGH for the mechanism,
+UNKNOWN for its cause.**
+
+§O established that the reach oracle emits nothing. The proximate mechanism is
+now located, and it is not what the auth noise suggests.
+
+`activeDispatches` retains three dispatches, all `status: failed`, and their
+shape is the finding:
+
+| field | value |
+|---|---|
+| `selectedTemplateId` | `None` |
+| `executionId` | `None` |
+| `goalReachReason` | `None` |
+| `error` | **`None`** |
+
+**The walk dies before template selection, and records no reason for it.** One
+of the three is a deliberately trivial non-edit probe dispatched for this test
+("report how many shapes are advertised"), so this is not confined to edit
+goals. `recordDeterministicLabel` opens with `if (!executionId) return;`, so a
+walk that dies pre-selection can never produce a verdict, a label, or a
+goal-path row. Confirmed at the store: **`goal_execution_paths` rows created in
+the last 12h = 0**, matching `learning.goalPathRecorded: false` on every
+retained dispatch.
+
+### Auth is not the cause, despite appearances
+
+While diagnosing this, a large concurrent auth failure appeared —
+**196,497 `401`/`INVALID_API_KEY` lines in 12 hours** — and the tempting
+inference is that writes are being rejected. They are not. **12,961 `execution`
+rows were written in the last 12h (2,962 of them non-auth).** Vessel writes to
+activity-api succeed. Activities execute normally via timers and satisfiers; it
+is specifically the *goal walk* that dies early.
+
+### The auth storm is a separate, real defect
+
+Filed separately. A WebSocket client presents a revoked 32-character credential
+(`credential_prefix=eKo`) to identity **roughly once per second, for 48h+**.
+Each rejection still mints an `execution` row *and* a
+`variant_performance_metrics` dual-write against arm `auth_resolve_v1`, now
+reporting `total_executions=503380`.
+
+Measured blast radius: that arm holds **10,544 of 54,790 `execution` rows —
+19.2% of the retained trace store is a failing login retry** — and it produced
+**3,862 of 4,028** posterior-skip events in the 60-minute sample from §O, which
+is why that log was unusable as a health signal.
+
+Explicitly *not* claimed, because it was checked and is false: this is **not**
+evicting trace history. 54,790 rows against a 150k cap, oldest surviving row
+2026-08-21, ~20 days retained. The gap between 503,380 reported and 10,544
+retained (~48×) is the known `total_executions` inflation defect, not eviction.
+
+### Registry under-population — recorded, relevance unproven
+
+Discovery holds **10 vessels advertising 406 shapes**, and `goal-host-vessel` is
+**not among them** (nor ias-executor, identity, ribosome, boredom,
+metric-collector, obsidian, federation). Independently corroborated: the MCP
+cockpit fails with *"could not find goal-host-vessel via discovery."*
+
+Whether this causes the pre-selection failure is **not established**, and it
+would be easy to assert — the walk runs *inside* goal-host and has no obvious
+need of goal-host's own registration. Recorded as an observation, not a cause.
+
+### The next step, and the trap in it
+
+The dispatch record carries `error: None`, so the exception or empty-candidate
+condition is being swallowed. Making that reason visible is the entire fix and
+is a one-line diagnostic where `selectedTemplateId` is left unset.
+
+Which runs directly into §N: **the vacuous-edit gate will refuse exactly that
+diagnostic** unless it carries a conditional. The system's ability to diagnose
+why it cannot reach is gated by a rule that refuses to let it add the log that
+would say why. That is not a coincidence worth admiring — it is the single
+highest-value thing in this addendum, and it is the operator decision already
+filed.
+
+### Three false zeros in this section alone
+
+`/vessels` returned `0 vessels` (an auth error parsed as an empty list);
+`vesselRegistry` returned `0` twice more (wrong envelope — it needs
+`{pointer:{type}}`, and a missing-pointer error deserialises as empty). Each was
+caught only by printing the raw body. Combined with the three failure-branch-only
+logs in §O, the session's dominant methodological finding stands: **in this
+system, "zero" is the default return for asking wrongly, so a zero is a claim
+about the question until the raw response has been read.**
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
