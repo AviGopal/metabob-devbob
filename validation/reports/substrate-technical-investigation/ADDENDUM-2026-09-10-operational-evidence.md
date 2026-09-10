@@ -1567,5 +1567,31 @@ The rule this generalises to is the one already in §19 in a different dress:
 it.* Every one of the five hypotheses was falsifiable against a string the
 system had already printed.
 
+### The sixth hypothesis, caught before publication
+
+The escalation lane ends at the same gate: `patch_with_tools` applies the edit
+(`fs_edit -> OK`), announces `turn N verified-green terminal — auto-done`, and
+then emits `FAIL: vacuous_edit`. All three ias-executor escalations end there,
+so escalation offers no relief from this rule — and *"verified-green terminal"
+is not a verdict*, it is the lane's opinion of itself one line before it fails.
+
+A prefix-matched tally over four days then showed **296 `start` lines, 200
+`FAIL` lines, and zero success lines** — which reads as a lane that has never
+landed. It is not. Reading the source first (`patch-with-tools.ts`) shows the
+resolver **emits no success log at all**: every terminal-ish `console` call is
+`FAIL`, `cutover gated OUT`, `POISONED BASELINE`, or `salvage terminal`. The
+absence of a success line is evidence about the logging, not about the lane.
+
+Measured at the layer that consumes a land instead — git — there are **159
+substrate-authored commits** in the same window (development-vessel 145,
+goal-host-vessel 13, boredom-vessel 1). The lane lands constantly.
+`ias-executor-ts` has **0**, which is consistent with this section's finding but
+is not established by it.
+
+This is the same error as the other five, caught one step earlier only because
+the "when a success counter reads 0, read the failure counter" law fired. The
+generalisation: **a rate computed from log lines is a claim about the logging
+until you have read the emitter.**
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
