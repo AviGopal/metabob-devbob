@@ -156,7 +156,7 @@ async function main(): Promise<void> {
         `${times.size} validator-shaped activity id(s) were seen in the last ${HISTORY_DAYS} days and none had the ${MIN_HISTORY} executions needed to establish a rhythm. ` +
         `A detector that checks nothing is indistinguishable from a detector that finds nothing, which is the class this detector exists to catch. ` +
         `Either the validator-id pattern no longer matches how validators are named, or validator execution has collapsed entirely.`,
-      { detector: "validator-liveness-tick", evaluated: 0, candidates: times.size, falsifier: "class2", evidence_resolve: "activityExecutionTrace" },
+      { detector: "validator-liveness-tick", evaluated: 0, candidates: times.size, falsifier: "class2", evidence_resolve: { shape: "activityExecutionTrace" } },
     );
     console.log(`[validator-liveness] META-GAP: fleet live, ${times.size} candidates, 0 evaluable`);
     return;
@@ -186,7 +186,7 @@ async function main(): Promise<void> {
       evaluated,
       worst: severed[0]?.id,
       falsifier: "class2",
-      evidence_resolve: "activityExecutionTrace",
+      evidence_resolve: { shape: "activityExecutionTrace" },
       measurement: "per-validator: silence > max(6x own median inter-execution gap, 24h), evaluated only for validators with >=5 executions in 30d, and only while the fleet is live",
     },
   );
