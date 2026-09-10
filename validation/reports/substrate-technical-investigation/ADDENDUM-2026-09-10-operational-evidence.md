@@ -2046,5 +2046,119 @@ ask" from "there is nothing there" — and that single confusion hid a dead flee
 credential behind a plausible story about capability.** Every metric in this
 investigation, including the headline reach number, was downstream of it.
 
+---
+
+## T. The instrument, repaired and then measured
+
+**Status: code- and store-demonstrated. Confidence HIGH.**
+
+Section S restored the fleet. This section is what became visible once it ran.
+
+### Reach was never measured before today
+
+Three lanes carry edit outcomes: the EARLY edit-intent path, the ROUTED
+edit-intent path, and the `patch_with_tools` escalation. A verdict enters the
+oracle corpus only if it is marked deterministic **and** reaches a
+`recordDeterministicLabel` call site. Before today, **none of the three
+satisfied both.** The reason strings lacked the `deterministic:` prefix that
+`recordDeterministicLabel`'s filter requires, and the paths return pre-walk so
+they never reach the walk's call sites at all.
+
+The consequence, measured across the whole 2392-row deterministic corpus:
+**two** achieved labels cited landing evidence, both from the reconciliation
+path — the one edit path that passed `deterministic: true` explicitly. Over the
+same period the substrate landed **159 commits in four days**. Successes were
+being discarded wholesale.
+
+All three lanes now label, in both polarities (`e992315`, `d08fe74`, the early
+call site, and `0abf462` for the escalation). Verified end to end: a label
+reading `deterministic:edit-intent-landed 51204ba…` with verdict `achieved`,
+cross-checked with `git cat-file` — the sha is a real commit in
+development-vessel.
+
+### The first honest reach measurement
+
+~3.75 hours of live traffic, working instrument, 63 labels:
+
+| population | reached | n | rate |
+|---|---|---|---|
+| edit goals | 1 | 48 | **2.1%** |
+| investigation goals | 3 | 12 | 25.0% |
+| other | 1 | 3 | 33.3% |
+| **all** | **5** | **63** | **7.9%** |
+
+Every earlier figure in this addendum — 10–18%, 15%, 0.6% — is void: measured
+over a dead fleet, through a labeler that discarded successes. **7.9% is the
+first number that means anything, and it does not meet the ~90% contract.**
+
+The shape is informative: the substrate can investigate, count and report at
+25–33%; it cannot land its own code changes. One bottleneck, not a diffuse
+deficiency.
+
+### Where edit goals actually die
+
+Four-hour window: **50 detected → 14 reached a compose verdict → 3 landed.**
+Twelve died on capacity outright; 22 escalated. So the dominant loss is goals
+never reaching the judge, and the machinery converts at ~21% when it does run.
+
+Matched three-day window, landings counted at the git layer: non-recommit
+**26.9%** (76/283), recommit depth-1 **5.3%** (6/113), recommit depth-2 **22.2%**
+(4/18). Recommit is ~31.6% of attempts for 11.6% of landings.
+(An earlier "54%" figure in this session was wrong — it sampled the most-recent
+200 files by mtime and caught a burst.)
+
+`landabilityScore` was blind to this: it penalises several id patterns, but a
+recommit gap is filed under a *new* id, so `failed_attempts` starts at 0 and the
+retry penalty never fires. A retry of a known failure ranked exactly like fresh
+work. Fixed as a **scored −0.15 down-weight** (`9b305d2`), deliberately flat
+rather than depth-scaled — depth-2 converts as well as fresh work — and
+deliberately not a per-class ban, because every failure class recommits to a
+nonzero yield. Recorded as an intervention with its pre-baseline (30.0% recommit
+share) and a marker, per law 12; the outcome needs hours the session did not
+have.
+
+### The system composed a fix that fabricated verdicts
+
+Commit `ae9210d`, substrate-authored against the reach-crediting gap filed
+earlier the same day, inserted:
+
+```js
+recordDeterministicLabel(…, {deterministic: true, reached: false, reason: "pending-verdict"});
+```
+
+placed one line **before** `const earlyReached` is declared. It cannot know what
+it is recording, and does not try — `reached` is hardcoded.
+
+**The gap said successes are never credited; the fix made the corpus lie.** An
+unconditional `not_achieved` on every early edit-intent completion would have
+depressed every reach aggregate — the exact metric that path had just been
+repaired to report honestly.
+
+It was caught before firing (0 `pending-verdict` rows; goal-host had just
+restarted) by **counting call sites** — grep returned 2 where 1 was expected.
+No gate flagged it. It typechecks, it is syntactically valid, it is not a
+vacuous edit, and it plausibly addresses the gap summary. Removed; one correct
+call remains.
+
+**No gate in this system asks whether the value being written depends on the
+computation whose outcome it claims to describe.** A dataflow check would have
+caught it and would generalise — this addendum already records two more of the
+same shape (the `resolution` string that is a hardcoded constant on every close;
+`total_executions` inflation).
+
+This is the sharpest available answer to §19's question about unsupervised
+self-repair of the measurement apparatus: the substrate produced a change that
+passed every review and would have made the instrument worse. Not incapable —
+the code was plausible, well-placed and type-correct. The failure mode is
+**confabulating a constant where a computed value belongs**, and that is
+precisely what an operator is still required to catch.
+
+### Standing caveat on the next reading
+
+Three previously-silent lanes have just begun reporting. The next reach figure
+may fall before it rises. That is the instrument becoming honest, not the system
+degrading — and distinguishing the two requires counting landings at the git
+layer, never from a compose report.
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
