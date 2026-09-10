@@ -1,0 +1,1571 @@
+# Addendum: operational evidence through 2026-09-10
+
+This addendum extends [REPORT.md](REPORT.md) (audit date 2026-09-09; coordinator
+`73c0d23`, public `dev` then at `b896339`). It is written separately because the
+original report is attested by [SHA256SUMS.json](SHA256SUMS.json) and must not be
+modified. Everything here uses the report's evidence labels; all findings below
+are **O** (dated operational observations on the live deployment) unless marked
+otherwise, and each was verified with the controls described in its source
+artifact. Source artifacts are the operator investigation notes of 2026-09-09/10
+(memory files named in each section) plus commits now on the public remotes.
+
+**Public-remote status as of 2026-09-10:** the public coordinator `dev` head is
+`7f97df70` and equals the local checkout. The load-bearing commits cited below —
+`f0cfb91`, `bac7d00` (development-vessel), `3d648ad`, `fda568a` (goal-host) — are
+all ancestors of their repositories' public `origin/dev`, so an external reader
+can verify them. **HIGH.**
+
+**Fleet snapshot 2026-09-10T04:49Z:** activity-api, discovery (10 registered
+vessels), goal-host (0 in-flight) and concept-db answered `/health`;
+development-vessel `:18090` did not answer within 3 s (it had restarted at
+2026-09-09 22:30 during the incident in §F).
+
+These findings postdate the report's drafting and materially sharpen three of
+its verdicts: on self-modification (§11), on learned selection as a substrate
+for critical function (§8/§16), and on the central empirical question (§20).
+
+---
+
+## A. Self-modification demonstrated in both directions — including measured negative drift
+
+The report concluded "self-editing is present; beneficial recursion is not
+established." The composer episode gives the sharper result: **autonomous
+self-modification is real, bidirectional, and currently unguarded by any gate
+that executes the result.**
+
+- The substrate rewrote its own change-authoring component,
+  `development-vessel/src/resolvers/feature-compose.ts`, **41 times over
+  2026-09-06/07 alone** (all commits authored "Substrate Autonomous"; 19 on
+  09-06, 22 on 09-07; ~50 over the week). Over the same days its core function degraded: the anchor-failure
+  rate (`apply_failed` with `ops_applied==0` on `feature_compose` executions)
+  went **3.3% → 34.4%**, with the zero-commit day 09-04 sitting at 3.3% as a
+  natural control. File growth was 4% and cannot explain a 10× rate change.
+- One regression is attributed exactly: commit **`f0cfb91`** is a one-line
+  inverted boolean (`if (!r.ok && …)` → `if (r.ok && …)`) that made the
+  blind-edit anchor repair fire only on edits that had *already succeeded*. It
+  passed typecheck, the semantic gate, and mitosis cutover, and ran for two
+  days. The pipeline's own log states why: *"every gate below this point READS
+  the diff; only a test RUNS it."* The post-land suite recorded `ran=false`.
+- The fix, **`bac7d00`**, worked and held: post-fix window 31/184 = **16.8%**
+  vs 09-08's 93/270 = 34.4%, one-sided binomial p < 1e-6, indistinguishable
+  from the pre-inversion 19.0% level.
+
+Consequences for the report:
+
+1. §11's adaptation-level table stands, but Level 5 ("modify learning
+   architecture") now has a demonstrated *harm* instance, not merely a
+   possibility. Self-modification without execution-based validation is
+   **negative drift concentrated in the exact capability needed to detect it**
+   — the composer modifies the component that performs all modification.
+2. §16's "code regressions" row is upgraded from risk to observed incident
+   class (second instance of a single inverted boolean disabling an entire
+   lane; the first disabled the gap store's escalation writes).
+3. The dominant compose failure mode is now characterized: **ambiguous
+   anchors** (the drafter plans on non-unique fragments such as
+   `"return null;"`, 41 occurrences in the target file, and the applier
+   correctly fails closed) — while the pipeline *computes verified-unique
+   anchors and discards them at plan time* ("57 locator candidates" logged in
+   the same trace). A separate clean observation shows the drafter
+   **paraphrases** anchors it was given verbatim (drops a type annotation,
+   drops a `from`-clause, changes indentation), and a prompt-level instruction
+   against this (`12c4c58`) was echoed back and ignored on the very next
+   repair. The lever must be mechanical, not prompt-level. **O/HIGH** for the
+   rates; **C/HIGH** for the fail-closed anchor logic.
+
+## B. Learned scheduling starves the maintenance layer that would detect drift
+
+The report treated Thompson selection as the learned policy over activities.
+The cadence census shows a structural failure mode of making *critical
+function* depend on that policy:
+
+- Of **102** validator-shaped activities that executed at all since 08-25,
+  **90 are dormant >24h** (many 9–16 days). Every survivor is systemd-timed or
+  very-high-frequency; **every dormant one is `satisfier:*` or
+  `learned-composition-*`, i.e. selection-scheduled.**
+- The cadence layer itself is the cleanest case: `rhythm_conductor_tick` — the
+  component whose job is to make work due on a rhythm — is registered as a
+  Thompson-selected satisfier with **11 executions ever**. CLAUDE.md's own
+  exemption rule names the principle it violates: *"a check cannot be scheduled
+  by the mechanism it exists to recover."* When selection drifts away from the
+  conductor, cadence stops, and a stopped cadence layer emits silence.
+- **Negative result:** seeding 13 rhythm impulses on 09-07 did *not* restore
+  validator cadence, because the consumer was itself unselected. Necessary but
+  insufficient.
+- A bootstrap-tier `validator-liveness` watchdog (expectation = each
+  validator's own median inter-execution gap) was landed on 09-09 as the
+  operator-side mitigation (`8a3804ff` in the coordinator).
+
+This adds a failure mode absent from §16's table: **learned selection has no
+obligation to keep any activity alive**, so any capability that exists only as
+a selectable activity — including the system's own self-observation — can die
+silently of unpopularity. It also qualifies law 5 ("pace is a rhythm, not a
+throttle") as currently unimplementable on top of selection alone. **O/HIGH.**
+
+## C. The teaching channel anti-learns; its detector is permanently disarmed
+
+The report noted that stored lessons need a runtime reader. The 09-09 trace
+shows the reader exists and the *grader* does not:
+
+- `feature-compose.ts` injects `compose_lesson` concepts into the drafter
+  prompt at three sites and contains **zero usage-recording calls**. Of 36
+  lesson concepts, 21 were ever loaded, **0 ever credited or blamed** — while
+  the fleet-wide counters do increment (16,586 concepts with successes,
+  15,225 with failures), so the zero is channel-specific, not instrument
+  noise. The decisive tell: feature_compose fails most attempts, so a wired
+  credit path would show a large `times_failed`; both counters at zero means
+  the path never runs.
+- Concept relevance is `(times_succeeded+1)/(times_loaded+2)`, so a loaded-but-
+  never-credited lesson's relevance **decays monotonically with use** (the
+  anchor lesson reads 0.00 after 422 loads). The decay is inert for
+  class-keyed recall (the FTS branch never reads relevance) but bites on
+  no-class recall and `min_relevance` filters. **C/HIGH.**
+- The fix half was **built 2026-06-13** (`credit-primed-concepts.ts`, whose own
+  header names this exact decay) and wired to a different drafter — the
+  producer was never connected.
+- The detector for exactly this condition
+  (`learning_signal_health_observer`, also 2026-06-13) is built, seeded,
+  registered — and **can never fire**: its data source returns 55 concepts
+  regardless of the requested limit, below its hardcoded volume floor of 50
+  loaded concepts, so it reports "cold start" permanently. Its own sample
+  already shows a success-credit ratio of 0.0 against a 0.1 threshold; the
+  volume gate alone suppresses the alarm. **C/HIGH.**
+
+This is the **fourth confirmed instance of one pattern** (rhythm registry;
+`regionHint`; lesson credit; its own detector): *the substrate builds the
+correct mechanism and never connects it to its producer, and the disconnection
+is invisible because absence of signal reads as health.* This pattern is now
+the report's strongest concrete answer to open question 1 ("what fraction of
+eligible executions deliver an update to the state the next selector reads") —
+for the drafter-lesson channel the measured answer is **zero, for three
+months**. Relatedly, the flat-pointer gap write path
+(`gapFromFlatPointer`) silently drops `classification_metadata`, so any
+measurement predicate filed through the obvious MCP call is destroyed at the
+boundary (store census: 758 `falsifier:none` vs 15 armed). One channel can
+starve every producer upstream of it.
+
+## D. The authoring funnel, measured at the field level
+
+Field-extracted from 457 classifiable compose reports over 09-06→10 (not the
+journal grep, which was lane-scoped and wrong by 3–10×):
+
+| outcome | share |
+|---|---|
+| favorable (landed) | **12.5%** (57) |
+| apply_failed — drafter/anchor disease | 28.2% (129) |
+| semantic refusal — judge disease | 24.9% (114) |
+| no gate verdict recorded | 33.7% (154) |
+
+Lane is the discriminator: **route-edit lands 48/261 = 18.4%; the recommit
+lane lands 1/121 = 0.8%** yet consumes ~26% of all attempts. Caveats carried
+from the source: rates are over reports (per-gap reports overwrite across
+attempts, so attempts are undercounted), and a third of reports record no
+verdict at all. Independently, substrate-authored commit volume (counted by
+`git log --author='Substrate Autonomous' -- 'src/*'`, *not* the unreliable
+`landed_vessels` trace field, which only began populating 09-06) is genuine
+but **declining: 34 (09-05) → 33 → 33 → 12 (09-08)**. The two instruments
+must not be conflated: by the field-extracted report count, 09-09 shows 18
+favorable composes (§E's probe landed three commits that day), so the lane
+was alive on 09-09. The one genuinely zero reading is **09-10's 0 favorable
+in 54 reports** (p≈0.001 against the 12.5% baseline) — a watch item, since
+the 09-10 window is partial. **O/HIGH** for the field extraction.
+
+## E. The full-cycle probe: the report's proposed instrument tests, partially executed
+
+On 09-09 an operator-authorized probe dispatched live goals and followed each
+seam through the stores — this executes, at n=1 each, several experiments the
+report's §17 proposed:
+
+**Closed seams (positive evidence, O/HIGH):** trace write → reach verdict →
+`reach_graded:true` → **posterior delta formula-exact**
+(Δα = 0.8046 = 0.5 + 0.5·(0.5·cost + 0.5·prod) on a named arm); goal-path rows
+including failed attempts; reached-command cache reuse observed ("SKIPPED
+synthesis"); **a bad pathway was not replayed** (wrong-method run not reused;
+the second dispatch answered correctly) — a live failure-learning result;
+hollow-satisfier detect→suppress→honest-retry; compose→cutover→push landing
+three commits; and the semantic gate correctly rejected a file-only patch as
+dead code ("no mechanism guarantees the rotation will ever invoke this
+template") — the gate saw a partial-land defect.
+
+**Open seams (negative evidence, O/HIGH):** the reach oracle accepted two
+derivations sharing the same wrong method as "independent" confirmation and
+granted α-credit to a wrong answer; a multi-part compose that landed a file
+*without* its registration still graded `reached:true`; and — the most
+consequential new class — **the compose lane mutated a filed gap's
+`edit_site`/falsifier anchor, so the measurement predicate read "present" and
+the gap measured closed 29 minutes *before* the fix landed.** A store-layer
+falsifier-immutability guard was landed the same day (`80b5e2d`) and verified
+with a two-direction live control. Verdict-carrying records being writable by
+the lane under measurement is an evaluator-integrity failure mode the report's
+§16 anticipated abstractly; it is now observed concretely.
+
+## F. Persistence fragility: the gap store lost 97% of its rows at a restart
+
+On 09-09 the development-vessel gap store went from a confirmed 4,113 gaps
+(14:35) to 44 (22:59) across a vessel restart; no live file contained the
+missing rows. Recovery came from orphaned atomic-write temps
+(`gaps.json.<pid>.<n>.tmp` — writes whose rename never completed; ~50 of them,
+~300MB, themselves a disk leak) and a pre-merge backup; post-restore the store
+read 4,187 gaps with 0 missing against two independent pre-outage snapshots.
+Compounding traps: at least four stale `gaps.json` copies exist on the box
+(the live one is under the *process's* `WORKSPACE_ROOT`, readable only from
+`/proc/<pid>/environ`), and one abandoned copy has a fresh mtime over
+July-era records. A host power outage the same day was survived by the
+SQL database intact (execution rows grew 36,633 → 52,430), so the fragility
+is specific to the file-backed JSON stores, exactly the tier the report's
+§8 flagged as "best-effort." Law 7's gap triple is measured over a store that
+can silently lose 97% of itself. **O/HIGH.**
+
+---
+
+## Revised verdicts
+
+The report's §20 table stands except as sharpened here:
+
+1. **Is recursive self-improvement present?** Unchanged conclusion, stronger
+   evidence: self-modification is demonstrated **in both directions**. The
+   system autonomously repaired real defects (`bac7d00`, `80b5e2d`,
+   `2f04478`) and autonomously broke its own repair machinery (`f0cfb91`) for
+   two days through every gate. The missing ingredient is now precisely
+   located: **no gate executes the changed code** (post-land suite
+   `ran=false`), so drift accumulates fastest in the most-edited component,
+   which is the editor itself.
+
+2. **Does experience make the whole measurably more capable?** The mechanisms
+   remain real (probe §E confirms the posterior formula, command reuse, and
+   failure suppression live), but the system-level series are flat or
+   declining over the observed window: reach flat ~4.5% across 72 readings in
+   48h (09-08 series), β accumulating 60× faster than α, authoring yield
+   12.5%, substrate commit volume declining, and observed capability gains
+   arriving as **step functions from specific bug fixes** rather than
+   compounding curves. The binding constraint is not learning arithmetic —
+   it is **channel integrity** (four build-but-never-connect instances, one
+   predicate-destroying write path, one mutable falsifier, one store that can
+   lose 97% of itself) plus **selection-scheduled criticality** (§B).
+
+3. **Central question.** The report's answer stands with one sharpened clause:
+   Substrate is more than orchestration — procedures, statistics and code
+   genuinely persist and are genuinely consumed — but as measured through
+   2026-09-10, accumulated experience has **not yet outrun the system's own
+   channel decay and self-inflicted regressions**. The immediate decisive
+   experiment is unchanged from §22 (evidence conservation first), with one
+   addition ranked above all template/commit work: **an execution-based
+   post-land gate for self-modifications of the modification machinery**, and
+   **timer-tier scheduling for any activity whose silence is itself the
+   failure signal**.
+
+## G. Live intervention, 2026-09-10: the loop closed one gap and jammed on another
+
+An authorized intervention session dispatched fixes through the substrate and
+observed the effects. Two armed gaps with opposite outcomes give the sharpest
+available answer to §A/§C's open question — *what determines whether the
+self-repair loop conducts?*
+
+**The loop closed a gap autonomously, verified end to end (n=2 for the
+four-link chain).** The gap filed 09-09 01:05 for the predicate-destroying
+flat write path (§C) was closed with no operator hands: commit `b907922`
+landed at 01:29 naming the gap id in its message, and the gap measured closed
+at 01:32 — **after** the landing, the correct order (contrast §E, where a
+closure preceded its fix by 29 minutes). The diff is a correct three-line
+additive spread. Verified live today at the consuming layer: a probe gap filed
+through the flat path read back from the store with `falsifier:class1` and all
+four supplied predicate fields intact. The write path's own success report was
+not treated as evidence; the store read-back was. **O/HIGH.**
+The cost: `f2aea65` re-applied the *identical* fix at 01:45, thirteen minutes
+after closure, so the spread now appears twice byte-identical — **a closed gap
+does not stop an in-flight compose for it.**
+
+**The contrast case is the diagnostic one.** The lesson-credit gap (§C) remains
+open after 28 hours with `failed_attempts: 2` and roughly four further
+dispatches, *despite* a summary containing the proven in-process contract, the
+exact import form, an enumeration of four defects in an earlier inert landed
+attempt, and explicit edit guidance. Its recorded failure modes are
+`anchor_not_found` and `TS2322` — the drafter changed a function's return
+statement without its declared type or call site. **Information availability is
+not the binding constraint here; law 8 is already satisfied.** The discriminator
+is anchor tractability: the gap that closed needed three additive lines in a
+1,156-line file, while the one that jams needs a coordinated multi-site change
+in the 6,451-line `feature-compose.ts` — the composer itself. **The system
+cannot repair itself in the file that performs all repair, because that file has
+grown past its own drafter's anchor reliability.** That is the mechanism behind
+§A's capstone, and it predicts that composer defects will persist longest.
+
+**The mechanical lever already exists and is wired to the wrong path.**
+`feature-compose.ts` implements enumerated anchor choice — the model returns an
+`anchor_index` and the bytes are taken from a verified-unique list, so *"the
+anchor CANNOT be invented, because the model never writes it."* `anchor_index`
+occurs at exactly four lines, **all inside the re-derivation block**; the
+primary drafting prompt still asks the model to reproduce anchors verbatim,
+which it paraphrases. This is a fifth instance of the build-but-never-connect
+pattern and the most consequential, since 28.2% of compose attempts die in the
+path that lacks it. Even in re-derivation the choice is soft ("PREFER") with the
+free-text fallback open. **C/HIGH.** In fairness to that module, it is better
+engineered than §A implies: indexed answers win, the window-provenance check is
+deliberately skipped for indexed anchors, single-candidate lists auto-accept,
+and every check fails open.
+
+**Self-modification deposited junk in the composer's hot path.** Commit
+`6fcdf40` (09-07, autonomous, during the 22-commit day) injected two dead no-op
+`await new Promise(… setTimeout(resolve, 0/1))` statements into the anchor
+re-derivation region, at zero indentation, splitting a comment paragraph in
+half. They are valid TypeScript, so typecheck, semantic gate and cutover all
+passed. Two occurrences in `feature-compose.ts`; zero in two sibling resolvers —
+the garbage is localized to the most-edited file. During the intervention the
+pipeline logged its own blind spot verbatim: *"TARGET HAS NO TEST FILE … every
+gate below this point READS the diff; only a test RUNS it. A FAVORABLE verdict
+here means the change was reviewed, never executed"* — and named a third
+self-modification incident, `d96e2ae`, "an unconditional self-call [that] landed
+and hung the vessel." **O/HIGH.**
+
+**The instrument, re-validated and extended.** `apply_failed AND
+ops_applied == 0` over `feature_compose` executions reproduces the §A series
+exactly through 09-08, which is what licenses the new points:
+
+| day | n | hard fail | rate |
+|---|---:|---:|---:|
+| 09-05 | 233 | 24 | 10.3% |
+| 09-06 | 242 | 29 | 12.0% |
+| 09-07 | 200 | 38 | 19.0% |
+| 09-08 | 270 | 93 | **34.4%** |
+| 09-09 | 340 | 68 | 20.0% |
+| 09-10 (partial) | 101 | 23 | 22.8% |
+
+**`bac7d00` removed the spike but not the drift.** The rate has settled at
+roughly **double** the 10–12% baseline of 09-05/06. §A's claim that the fix
+"worked and held" is correct against 09-08 and must be qualified: it did not
+restore the early-September level. A denominator caution: the looser predicate
+`apply_failed = true` alone reports 43.3% for 09-08 rather than 34.4% — two
+defensible metrics, very different numbers, so the predicate must always be
+stated. **O/HIGH.**
+
+**Three further defects observed in a single four-minute log window.** The
+compose lane is **serialized** — a freshly emitted narrowed child gap could not
+start because "a compose is already in flight" — and because BUSY is a
+non-attempt, queueing pressure is invisible to every yield rate in §D.
+**Rollback is skipped when a concurrent compose has changed the file**
+("SKIPPING ROLLBACK … file content has changed"), so a *rejected* edit's bytes
+can survive in the live tree. And auto-generated route-edit gaps are still
+stamped `falsifier=none`: the §C repair preserves predicates that are
+*supplied*, but nothing arms one at filing time.
+
+**Operator-tooling blocker.** The MCP cockpit's configured API key is rejected
+by identity (401, "invalid or has been revoked"), disabling every
+discovery-dependent tool including `registry_query` and `run_goal_async`. Work
+proceeded by taking the live key from the vessel process environ and posting
+directly to goal-host, discovery and development-vessel. Note also that
+goal-host exposes **no dispatch-status route** — records live in memory — so the
+ground truth for any self-edit is `origin/dev` and the deployed tree, never the
+caller's report. This independently reconfirms §A's `goal_status` warning.
+
+## H. What the intervention shipped, and the blocker it uncovered
+
+Three changes landed, each verified at the layer that consumes it.
+
+**1. A dead-code removal landed through the substrate's own lane** (`24ad682`,
+authored "Substrate Autonomous"). Rather than hand-editing, a route-edit goal
+was dispatched to remove the two junk no-op statements described in §G. The
+chain completed in about eight minutes: early edit-intent routing → a plan that
+reproduced both anchors verbatim → semantic gate `addresses:true` → mitosis
+cutover `FAVORABLE` citing typecheck, shape-dispatch and a baseline-delta test
+run → deployed and pushed. The recipe that worked, and it is narrow: **one file,
+two ops, anchors supplied as exact single-line ASCII strings of 53–55
+characters, each verified unique before dispatch, with an explicit statement of
+what not to touch.** Landed is not loaded: the tree updated while MainPID was
+unchanged; the vessel reloaded only later.
+
+**2. A detector for the composer-degrades-itself class** (`13176c29`),
+`scripts/substrate/compose-drift-tick.ts` plus systemd units. This is §A's
+top recommendation, built at the bootstrap tier for the reason CLAUDE.md already
+gives — a detector for the authoring lane cannot be authored and scheduled by
+the authoring lane. It measures rather than sets policy: the reference is the
+**median** of the composer's own preceding complete days, and degradation must
+clear a relative margin, an absolute margin and a one-sample z together.
+
+The median-versus-pooled choice is the substantive design decision, and running
+the first version exposed why. A pooled two-proportion test folds any
+previously degraded day into the reference, so the detector **normalises to its
+own bad history and goes blind exactly after an episode** — the failure mode it
+exists to catch. Measured on the real series: pooled, 09-09 scores z=1.84 and is
+waved through; against the median it scores z=5.19 and fires. *A baseline that
+contains the disease cannot diagnose it.*
+
+Proven to complete rather than merely to exist, with controls: the **positive
+control fires on the real 09-08 episode at z=17.4**, meaning it would have caught
+`f0cfb91` in one day rather than two; negative controls abstain on a flat series
+and on a 22% blip at n=45 (z=2.43, below the 2.5 guard); and a meta-guard files a
+gap about itself if it ever evaluates zero days. Its first live run produced a
+**true positive that is not the acute regression** — 09-09 at 20.0% against an
+11.1% self-baseline — independently reproducing the §G finding that `bac7d00`
+removed the spike but not the drift.
+
+**3. Both bootstrap detectors were filing unarmed gaps** (`614de014`).
+`classifyFalsifier` reads `evidence_resolve` as an **object** and takes its
+`shape`; a bare string yields `falsifier:"none"`. The validator-liveness
+watchdog shipped on 09-09 passed a string, so its live gap
+`validator-cadence-severed` sits open and unmeasurable in the 758-row `none`
+pile. This is a **sixth instance of the build-but-never-connect pattern, authored
+by the same operator who catalogued the first five** — the detector fires
+correctly and files evidence that can never be measured closed. Both were fixed
+and verified by read-back: `falsifier:"class2"`, position
+`evidence_resolve.shape`.
+
+**4. A detector for the silent-store-collapse class** (`d055f18e`),
+`scripts/substrate/gap-store-census-tick.ts` plus units, addressing §F. It
+records how many gaps the resolver serves and reports a drop below half the
+highest count in the preceding fourteen days. Three design points are load-bearing
+and each was forced by an earlier error in this report:
+
+- *It asks the resolver, not the filesystem.* `WORKSPACE_ROOT` differs between a
+  script's environment and the vessel process's, and several stale `gaps.json`
+  copies exist on the box, one with a fresh mtime over months-old records —
+  the trap that nearly produced a false two-day-persistence-failure in §F.
+- *The baseline is a high-water mark, not an average.* Closed gaps keep their
+  rows, so the series is monotonic apart from pruning; averaging would let a
+  collapse lower the bar it is later judged against, the same contamination the
+  compose detector avoids with a median.
+- *It observes and does not guard.* Refusing a destructive write is the real
+  repair, but a guard that can reject gap writes has the same shape as the
+  inverted boolean that once discarded every gap write, and creates a deadlock
+  unfixable from inside — one cannot file a gap about being unable to file gaps.
+  Changing write semantics is left as an operator decision.
+
+Controls against the live store: a first reading records and abstains; a
+synthetic 90,000-row high-water mark fires the collapse branch; growth from a
+4,113 mark does not; a below-floor mark abstains. The gap emitted by the positive
+control was **retracted in state and closed**, not merely corrected in prose.
+A cheaper store-wide signal available in the same response (`falsifier_coverage`)
+was deliberately rejected: it covers only the open population, so an ordinary
+closing sweep would read as a collapse.
+
+**The blocker: the glue layer had been frozen for a day, silently.**
+`substrate-pull-sync` converges the super-repo into the container, and its
+fast-forward pull had been **failing since before this intervention** because
+three untracked working-tree copies of the 09-09 validator-liveness files
+blocked the merge. The container's glue layer was pinned at `b8963396` — the
+very revision this report pinned as public head on 09-09 — while origin had
+advanced. Every super-repo change in that window, including this one, would have
+been committed, pushed, and never reached the running system, reported as
+`done — synced=0 failed=0`. The three files were provably redundant (two
+byte-identical to their tracked versions, one strictly superseded by the fix
+above) and were removed, after which convergence succeeded.
+
+Two further observations from that repair. The timer converged **disabled** on
+the first tick and was enabled only on the second, because
+`substrate-pull-sync` executes `/usr/local/bin/substrate-pull-sync` rather than
+the super-repo copy, so the script self-updates one tick behind itself. And the
+enabling step worked because of the 09-09 fix `7f97df70` — its log line
+("converged but disabled, so it had never fired") appearing here is that fix's
+first observed real-world use. The unit was then run through systemd to
+confirm its `ExecStart` and environment resolve: exit status 0, correct
+detection emitted.
+
+This blocker deserves emphasis beyond its own repair. It is the same shape as
+every other finding in this report — a mechanism that reports success while
+conducting nothing — but it sits **upstream of the operator's own corrective
+work**, and it failed open with a reassuring `failed=0`. Any claim in this
+report about a super-repo change taking effect between 09-09 and 09-10 should be
+checked against the container, not against git.
+
+## I. The evaluator findings: a predicate satisfied by a comment, and a detector selected by its own answer
+
+Two results from the intervention bear directly on §16's evaluation-hacking row
+and on this report's own central recommendation, and both are adverse to it.
+
+**A Class-1 predicate is satisfiable by a comment, and one was.** The gap filed
+on 09-09 about the disarmed learning-signal health observer was armed Class 1
+with `expected_literal: "source_type"`. It measured **closed 54 minutes later**,
+on autonomous commit `80ff131`, which added exactly one line to the observer:
+
+```ts
+const subgroupSuccessCreditRatios = {}; // to hold ratios per source_type
+```
+
+The identifier is declared, never populated and never read, and the literal
+`source_type` occurs in that file exactly once — **inside the comment**. The
+predicate matched, the closure was recorded as measured rather than expired, and
+nothing was repaired. This is a clean instance of the class §E named abstractly:
+the letter of a measurement satisfied without the work. It also qualifies the
+report's own remedy. Arming predicates remains necessary, but a literal-presence
+predicate is **not sufficient**: the standing lesson that typecheck is blind to
+comments extends to the falsifier. Every Class-1 gap in the store shares this
+weakness. Behavioural Class-2 predicates should be preferred for anything a
+string could fake, and Class 1 reserved for literals whose appearance in a
+comment would be absurd. The dead declaration is also a stub that the semantic
+gate and stub detector passed.
+
+**A health detector now reports a false all-clear, having previously abstained
+honestly.** Resolving the observer today returns `total_concepts` 5000,
+`loaded_concepts` 5000, `loaded_with_success` **5000**, `success_credit_ratio`
+**1**, `enough_volume` true, `diagnosis` **"healthy"**. Measured against the
+store at the same moment: 69,142 concepts, 36,530 with loads, 16,673 of those
+with successes — a true ratio of **0.456** — and the subgroup the detector exists
+to watch, `compose_lesson`, at **17 loaded and 0 ever succeeded**.
+
+The mechanism is selection bias in the detector's own sample. It queries the
+concept search with no query, which takes the `relevance DESC` branch, and
+relevance is `(times_succeeded + 1) / (times_loaded + 2)`. Ordering by relevance
+therefore returns precisely the concepts that have successes; the top 5,000 of
+69,142 are success-heavy by construction, which is why total, loaded and
+loaded-with-success are all exactly the requested limit. **The numerator chose
+the denominator.** A health detector whose sample is selected by the health it
+measures cannot report ill health at any volume.
+
+The change since §C is the important part. The observer previously returned 55
+rows, below its floor, and reported "insufficient load volume to judge (cold
+start)" — wrong, but honest. The volume gate is now satisfied and the verdict has
+flipped to a false all-clear, which is **strictly worse than being disarmed**.
+Note the consequence for this report's own recommendation list: the earlier plan
+to "fix the search limit so the observer can fire" would have *caused* this
+outcome, and the 55-row cap was inadvertently load-bearing honesty. The two
+defects — a fleet-wide aggregate with no `source_type` breakdown, and a
+top-N-by-relevance sample — must be fixed together or not at all. The gap has
+been re-filed with a behavioural Class-2 predicate that compares the reported
+ratio against the store-computed one and requires a per-subgroup breakdown; no
+string in any file can satisfy it.
+
+Taken together these two results sharpen §19's critique. The system's difficulty
+is not only that a learning channel can lose information in transit; it is that
+**the instruments certifying repair can be satisfied without repair**, and that a
+monitor can migrate from honest abstention to confident error without anyone
+touching it.
+
+## J. The judge is not the disease, and the two failure rates may be one force
+
+A second intervention attempted to repair the false all-clear in §I by making the
+observer abstain when its page fills to the limit. **All three edits applied
+cleanly** — `apply_failed:false`, the anchors were exact — and the semantic gate
+refused it 2/2 with the reason: *"addresses the symptom but does not address the
+underlying gap. The core problem is that the /concepts/search endpoint is being
+called with no query."*
+
+**That refusal is correct**, and it is evidence against reading §D's
+judge-refusal share as simple obstruction. Honest abstention is better than a
+false all-clear, but it is not a repair, and the gate said so precisely. In the
+same log window the refuters also caught a genuine **partial land** on an
+unrelated change ("CHANGE 1 was skipped; the literal 2000 remains") — the exact
+class that wrongly graded `reached:true` in §E. The adversarial refuters are
+catching what the reach oracle misses.
+
+This suggests a structural reading of §D that the funnel numbers alone do not
+give. The judge demands root-cause fixes; root-cause fixes are larger; larger
+changes need longer anchors; and longer anchors are where the drafter fails.
+**The 28.2% `apply_failed` share and the 24.9% judge-refusal share are plausibly
+two faces of one force rather than independent diseases** — which would mean
+"fix the drafter" and "relax the judge" are not separable remedies, and that the
+real escape is making root-cause fixes *small*. That is precisely what the
+unused enumerated-anchor mechanism in §G would enable. **I/MEDIUM** — this is an
+inference from one refused change plus the funnel shares, not a measured
+decomposition, and it is stated as a hypothesis worth testing rather than a
+finding.
+
+**A hypothesis raised and retracted by control.** Because
+`/concepts/search` calls `recordPassiveUsageForResults`, and that module states
+that without a usage row "times_loaded never increments", it appeared the
+observer might inflate the very metric it measures — 5,000 loads per run, driving
+relevance down. Tested on two concepts across an observer run, one at the bottom
+of the relevance distribution and one at the top: **both unchanged**. The
+hypothesis is withdrawn before publication. The REST path does not record loads
+for this caller, while the `conceptSearch` *resolver* path does — two probes
+through it moved a concept from 431 to 433 loads. Two callers that both look like
+"search" have different usage semantics.
+
+The null result on the low-relevance concept independently **confirms the
+selection bias** of §I: that concept is untouched by an observer run because it
+sits at the bottom of the ordering the sample is drawn from.
+
+**What makes a real fix possible.** The search route parses `query`, `shape`,
+`source_type`, `min_relevance`, `limit` and `offset`. A `source_type` filter
+therefore returns a whole subgroup rather than the head of a global
+relevance-ordered list — `compose_lesson` is roughly 36 concepts, so its ratio
+can be computed exactly rather than sampled. One trap is already visible: the
+volume floor of 50 exceeds any individual subgroup's load count, so a subgroup
+breakdown that inherits it would be computed and then suppressed, reproducing the
+permanently-cold-start defect one layer down. All of this has been written into
+the gap, along with the refused approach and the ruled-out hypothesis, so the
+next attempt does not repeat either.
+
+**One further defect, which demonstrated itself.** `substrateGap_write` returns
+`success:false` when only its post-write trigger stumbles. A 4,165-character
+write was confirmed fully landed, with every metadata field preserved, while the
+caller was told it had failed; the journal shows the trigger both "failed with
+exit code null" and "(service started successfully)" in the same second, the
+resolver having returned the first attempt's outcome. This matters more than it
+appears because `substrateGap_write` **replaces rather than merges**, so a caller
+that believes the write failed and retries from a stale copy silently reverts
+what was stored. It reproduced while the gap describing it was being filed.
+
+## K. A semantically refused change was landed by the lane that has no semantic judge
+
+The refused change in §J did not stay refused. Four minutes after the semantic
+gate rejected it, the same hunk was committed and pushed. The chain was observed
+end to end, on a dispatch made during this investigation, with every artifact
+still on disk:
+
+| Time (UTC) | Event |
+|---|---|
+| 05:57:00 | `route-edit-811785ae` plans three edits to `learning-signal-health-observer.ts` |
+| 05:59:46 | Semantic gate **refuses**, refuters 2/2 at conf 0.90; report records `rolled_back: true` |
+| 05:59:46 | `[feature-compose] SKIPPING ROLLBACK … file content has changed (likely by another concurrent compose)` — repeated 06:02:24 |
+| 06:03:09 | **`patch_with_tools`** stages that same file; its recorded verification in full: *"verified-green: fs_edit applied and typecheck clean"* |
+| 06:04 | Commit **`6dc2005`** lands 7 insertions / 1 deletion and is pushed to `origin/dev` |
+
+The committed hunk is the first of the three refused edits, orphaned from the
+other two: it declares `pageLimit` and `sampleSaturated`, which nothing reads.
+The deployed tree and `origin/dev` are byte-identical, so this is live.
+
+Two defects compose here, and the second is the serious one.
+
+**Rollback was skipped while the report claimed it happened.** Skipping on
+concurrent modification is defensible on its own — clobbering another compose's
+work would be worse — but the compose report still records `rolled_back: true`,
+and the refused bytes remain staged for whoever comes next. A report that claims
+a rollback that did not occur is the same evidence-integrity failure this report
+documents elsewhere, now inside the safety machinery itself.
+
+**A lane with no semantic judge inherited and landed the refused work.**
+`patch_with_tools` verifies that an edit applied and that the file typechecks.
+Neither question can detect "this is dead code that does not address the gap" —
+exactly what the refuters caught. **So a refusal in the stronger lane becomes a
+landing in the weaker one, and the semantic gate is not binding on the
+repository.** This is not the first time this lane has landed unjudged changes to
+guard code: `550f2f7` replaced a refusal in `inertRegexEditRefusal` with
+`return null` through the same path, detected only afterwards by a probe.
+
+**This supplies the missing mechanism for §G's dead code.** The two no-op
+`setTimeout` awaits that `6fcdf40` injected into `feature-compose.ts` were an
+artifact without an explanation. Refused work becoming landed work explains how
+such fragments enter a file that every gate reviews. It compounds with a
+configuration detail: `noUnusedLocals` is not enabled (only `strict`), so
+orphaned declarations typecheck cleanly and nothing downstream objects.
+
+The gap has been filed with a behavioural predicate — after a semantic refusal on
+a file, no commit within the following ten minutes may contain any hunk from the
+refused plan — and the residue this investigation caused has been dispatched for
+removal.
+
+One methodological note, because it nearly produced a wrong finding. The first
+reading of this evidence was "a partial application survived the rollback," which
+is wrong about the agent and would have sent the repair at the wrong component.
+The artifact that identified the actual lane and its one-line verification string
+was a `pwt-…-landing.json` file sitting in the same directory — a file type not
+being looked for. **Read every artifact in the window, not only the one whose
+name is recognised.**
+
+## L. The last gate false-blocks correct changes by mistaking timeouts for regressions
+
+The cleanup dispatched to remove the residue from §K was itself refused, and the
+reason is a distinct defect in the final gate before landing.
+
+The change deleted two unused `const` declarations and nothing else. Both edits
+applied (`apply_failed: false`), typecheck passed, shape-dispatch passed, and the
+semantic gate **never ran** (`addresses: null`). The verdict was UNFAVORABLE on
+this line alone:
+
+> NEW test failures introduced by this draft, REPRODUCED on a second run (1):
+> `vessel_mitosis_cutover > freshness gate: refuses cutover when staged_base_sha is missing`
+
+The edited module is `learning-signal-health-observer.ts`; the failing test
+exercises `vessel-mitosis-cutover.test.ts`. There is no import path between them,
+and the deleted constants were read by nothing. Running that test file on a clean
+tree with no draft applied reproduces the failure — **21 pass, 2 fail** — and both
+failures are **5001ms against a 5000ms limit**. They are timeouts, not assertion
+failures: the tests spawn git and filesystem work, and during a compose (running
+typechecks and model calls concurrently at a host load average around 8) they
+exceed the limit.
+
+**This is why the reproduction check does not filter them.** The retry runs under
+the same load as the first attempt, so a slow test is slow twice. "Reproduced" is
+being read as "caused by the draft" when it establishes only "not a one-off
+flake". The discriminator that would work — an isolated, unloaded re-run — is
+precisely what is not done. A cheaper filter also exists: a failure by timeout is
+not evidence about a diff unless the diff plausibly touches that execution path.
+
+Two aggravating conditions. The baseline is noisy — this vessel carries **28
+pre-existing failures out of 2,235 tests**, several of them in the `substrateGap`
+resolver itself. And the complementary defect is already documented in §11 of the
+main report: `computeNewlyFailing` returns *no* new failures when the baseline is
+null or empty. **The same comparison fails open in one direction and false-blocks
+in the other**, both from treating a noisy comparison as authoritative.
+
+This matters for how §D's funnel should be read. If some share of verdict losses
+are false blocks of this kind, then effort aimed at the drafter and the judge is
+aimed at the wrong component, and the measured 20–23% anchor-failure rate is not
+the whole story of why work does not land. **I/MEDIUM** on the share; **C/T/HIGH**
+on the instance, which is controlled.
+
+A practical note for anyone reproducing this: the deployed tree carries 4 test
+files where `origin/dev` has 222. Verification correctly runs inside the compose
+clone, so a gate failure cannot be reproduced from `/vessels`.
+
+### The bypass again, twenty minutes later, in the opposite direction
+
+The cleanup described in §L did land — but not through the gate. Its compose was
+blocked at 06:18:57, `patch_with_tools` staged the same file at 06:20:01 with the
+same one-line verification, and commit `76cef65` landed it at 06:22:11.
+
+So within twenty minutes the same lane landed one change the **semantic** gate
+refused (§K) and another the **newly-failing-test** gate refused, with opposite
+effects: the first added the orphaned declarations, the second removed them. That
+the second outcome was desirable is luck, not a control. It is also the clearest
+available demonstration that the bypass is indifferent to whether the refused
+change was good.
+
+The consequence for this report is larger than the individual defect. **A verdict
+of UNFAVORABLE currently predicts nothing about whether a change reaches
+`origin/dev`.** Both gates are advisory in practice. That undermines the natural
+reading of §D's funnel — that refusal means work did not land — and means the
+12.5% favorable share is a lower bound on what actually reaches the repository,
+by an unmeasured margin. Any future attempt to measure authoring yield must count
+commits, not verdicts.
+
+### Third instance: the fix for this defect landed as an instance of it
+
+The repair dispatched for this very defect — two edits adding the deterministic
+vacuous-edit gate to the `patch_with_tools` path — reproduced it. The compose
+applied both edits and was refused by the refuters 2/2; `patch_with_tools` staged
+the file two minutes later; commit `9267810` landed **edit 1 only**. The committed
+result is `vacuousEditReason` imported on line 33 and referenced nowhere: a
+declaration nothing uses, which is exactly what `vacuousEditReason` exists to
+refuse. **The gate that would have caught this landing is the one that failed to
+land.**
+
+This also makes the pattern quantitative rather than anecdotal. **Three of three
+refused multi-edit dispatches this session had some subset of their edits reach
+`origin/dev` through this path**: 1-of-3 (`6dc2005`, orphaned declarations),
+2-of-2 (`76cef65`, which happened to be the desirable removal), 1-of-2
+(`9267810`, the dead import). So a refusal is not only non-binding, it is
+**non-atomic**: what lands is an arbitrary subset of a plan that was judged as a
+whole, and a subset carries no verdict at all, because coherence was a property of
+the whole plan.
+
+One caveat that cuts against my own dispatch as much as against the judge. The
+refusal's stated ground — that `baseContent` and `afterSrc` are not in scope — is
+wrong about the source as specified: `baseContent` is declared at line 580,
+`beforeSha` 581, `resetTarget` 633, `afterSrc` 1223, `afterSha` 1224,
+`structuredError` is module-level at 116, and `resolvePatchWithTools` opens at 553
+with no nested function boundary before the anchor. But both ops report
+`repaired: true`, meaning the drafter's anchors failed and anchor repair relocated
+them, so the judge may have been describing the patch it actually saw. These
+cannot be distinguished from the report. Either way it isolates a separate defect
+worth naming: **the judge evaluates the applied patch while the author reasons
+about the planned one, and anchor repair silently moves the difference between
+them.**
+
+### Correction: the mechanism is narrower than "bypass", and partly already known
+
+Reading both resolvers rather than only their traces corrects the account above,
+which was inferred from artifacts. Three qualifications matter.
+
+**Escalation is by design and is legitimate.** `feature_compose` escalates to
+`patch_with_tools` when a compose fails; the intended trigger is a mechanical
+anchor failure, which is exactly what byte-anchored patching exists for. The
+problem is not that escalation happens but what the end of that route checks.
+
+**The defect was already identified and partly remediated.** `patch-with-tools.ts`
+imports `regionContainmentVerdict` from `feature-compose` and runs it before
+staging — added 2026-08-07 after `046d754` landed an unjudged patch on the human
+UI surface (reverted as `78c675d`). Its comment states the problem precisely:
+*"this patcher self-lands via the mitosis cutover and never runs feature_compose's
+semantic gate, so a patch that edits the wrong part of the right file lands
+unjudged."*
+
+**The remediation is inert in practice because its input is almost never
+supplied.** That block closes with *"Gated ONLY when the proposal names a region,
+so every other patch is unaffected."* Measured 2026-09-10: of **4,357 gaps, 113
+carry a region (2.6%); of 1,050 open gaps, 93 do (8.9%)**. So for roughly 91–97%
+of proposals the check is skipped entirely and typecheck is the only substantive
+gate — which is why both landings recorded verification as, in full,
+*"verified-green: fs_edit applied and typecheck clean"*. This is the same shape as
+every other finding in this report: a correct consumer whose producer supplies its
+input a small fraction of the time. **C/HIGH** for the code paths, **O/HIGH** for
+the coverage measurement.
+
+The same reading also shows the **flaky-gate problem of §L was already known and
+mitigated**, and identifies why the mitigation fails. `feature-compose` re-runs the
+suite and keeps only failures present in both runs, on the stated reasoning that
+*"Flake is BY DEFINITION non-reproducible."* Its comment even records the identical
+scenario from 2026-08-07 — a dispatched deletion of a genuinely unused import
+rejected on three "new" failures, escalated, with a failed rollback leaving the
+runtime diverged. **The refinement is that a load-induced timeout is reproducible**,
+so the both-runs filter confirms it rather than removing it. The suite is measured
+at ±3 failures across identical runs, so the baseline is noisy in the same
+direction.
+
+**The smallest sufficient fix needs no region and no model, and has been
+dispatched.** `vacuousEditReason(before, after)` already lives in a shared module
+(`src/vacuous-edit.ts`) and refuses only when every added line is a declaration
+whose identifier is never used in the result — a statement about the edit's text,
+not about responsiveness, and deterministic, so it cannot false-block under load.
+Commit `6dc2005` is exactly that case. Calling it unconditionally on the
+`patch_with_tools` path closes the vacuous case for every proposal rather than the
+2.6% that name a region. Running the full semantic judge on that path is the
+larger option and should be weighed separately, since escalation exists precisely
+because compose failed and an expensive judge there may move the stall rather than
+remove it.
+
+### Outcome: the gate landed on the second attempt
+
+Re-dispatched as a **single** edit — the import from the partial land was already
+committed, so completing the call site both wired the gate and removed the dead
+import — and it landed verbatim as `0896a1c` at 06:50:02 through the normal
+route-edit → cutover path. `patch_with_tools` now runs `vacuousEditReason`
+unconditionally before staging, closing the vacuous case for **all** proposals
+rather than the 2.6% that name a region.
+
+**Retraction, established after the change shipped.** This report previously
+stated that the gate would have prevented both `6dc2005` and `9267810`. That was
+asserted from the helper's documentation and never tested, and it is **false**.
+Run directly against the helper:
+
+| edit shape | refused? |
+|---|---|
+| single unused declaration | yes |
+| two independent unused declarations | yes |
+| two unused declarations, one referencing the other (`6dc2005`) | **no** |
+| a dead import (`9267810`) | **no** |
+
+Both observed landings fall in the uncovered rows. `6dc2005` added `pageLimit`
+and `sampleSaturated`, and `pageLimit` *is* referenced — by `sampleSaturated` —
+so "every added binding is unused" is false and the helper returns null even
+though the pair as a whole is dead. `9267810` added an import, which is not a
+`const`/`let`/`var` declaration and does not match the helper's pattern at all.
+
+What the landed gate actually buys is narrower but real: it closes independent
+unused declarations and diagnostic-only edits on a path that previously had no
+check beyond typecheck, for every proposal rather than 2.6% of them, and it is
+deterministic so it cannot false-block under load. The two uncovered shapes need
+different mechanisms — an unused-import check, and reachability over the *set* of
+added declarations rather than a per-line test, since each line individually "is
+used" and only the group is dead.
+
+**The cheaper root fix is a compiler setting.** Every comment in this codebase
+explaining why such edits survive says the same thing: *"noUnusedLocals is not set
+fleet-wide."* Enabling `noUnusedLocals` and `noUnusedParameters` in the vessel
+tsconfigs would make typecheck itself reject both uncovered shapes, on every path
+and at every gate, with no new gate code. The cost is that it will surface
+existing violations, so it needs a survey of how many first — that survey is the
+next step rather than another bespoke gate.
+
+This retraction is also a process finding about the operator, not only the
+system: the control that refuted the claim took under a minute and was run
+*after* shipping and publishing rather than before. The standing rule is to
+control a favourable result first, and it was inverted here.
+
+Two qualifications, both material. First, **it is committed but not yet loaded**:
+the vessel's process started at 06:42:20, eight minutes before the gate landed,
+and the working tree is the runtime artifact only after a restart. With two
+requests in flight and the compose lane active, restarting to force the load would
+kill live work; the vessel has restarted four times in two hours, so it will pick
+it up naturally. Until then the gate exists and does nothing — the same
+landed-but-undeployed state this report treats as a distinct condition elsewhere.
+
+Second, the single-op retry is itself evidence for the atomicity finding above:
+the two-op version had one op land and one refused, while the one-op version
+landed whole. **Reducing a change to a single operation is currently the most
+reliable way to make a landing atomic**, which is a workaround for the defect, not
+a fix.
+
+### The root-cause repair for the false all-clear, and the probe that validates it
+
+The symptom-only patch of §J having been correctly refused, the root-cause fix is
+to stop deriving any verdict from the unfiltered relevance-ordered page and
+compute per-subgroup ratios from `source_type`-filtered requests, which return a
+whole subgroup rather than the head of a global ordering.
+
+The assumption was verified by an executed call before relying on it — a step
+skipped on the earlier attempt, whose scope assertion turned out to be the thing
+in dispute. `GET /concepts/search?source_type=compose_lesson&limit=1000` returns
+**22 concepts, all of them `compose_lesson`, of which 15 have loads and 0 have
+ever been credited — ratio 0.0**. Twenty-two is far below the requested limit, so
+the page is the entire subgroup and carries no truncation or ordering bias.
+
+Under the dispatched change that subgroup clears its own floor (15 ≥ 5) and falls
+below the credit threshold (0.0 < 0.1), so `oneSided` becomes true and the
+observer reports the starved teaching channel instead of `"healthy"`. The
+subgroup floor is separate from the fleet floor by design: `minLoadedVolume` is
+50 and no individual subgroup reaches it, so inheriting it would compute the
+breakdown and then suppress it — reproducing one layer down the permanently
+"insufficient volume" defect the observer already had at fleet level.
+
+### Outcome: the false all-clear is closed, verified behaviourally
+
+The root-cause fix landed as `fbf2a60` at 07:09:37, and the vessel restarted at
+07:10:55 — after the commit — so it is loaded. Resolving the observer now returns
+`one_sided: true`, `gap_emission: "emitted"`, and the one-sided diagnosis, where
+an hour earlier the same call returned `diagnosis: "healthy"`. **C/T/HIGH**: this
+is a behavioural test at the consuming layer, not a reading of the source.
+
+Two qualifications, one of which required a further repair. The fleet figures in
+the response still read `5000/5000, ratio 1` because the change drives the
+*verdict* from the exact subgroup while leaving the fleet page as context — the
+verdict is now right, the displayed fleet ratio is still biased. More seriously,
+the gap the observer filed at 07:12:58 carried that biased evidence: *"only
+5000/5000 loaded concepts ever credited success (ratio 1.000)"*, which is
+self-contradictory and reads as healthy to anyone acting on it, while the
+condition that tripped the verdict was `compose_lesson` at 0 of 15. **A correct
+verdict attached to misleading evidence is the same defect this report documents
+throughout**, so a follow-up was dispatched to pass the triggering subgroup's
+counts into the emission instead of the fleet's. The first attempt **never ran** —
+goal-host returned `verdict=BUSY — capacity`, a non-attempt rather than a
+judgement — and a retry landed it as **`cc3400e`**, committed at 07:39:45. It is
+**not yet loaded**: the vessel process started at 07:10:55, so the observer will
+continue reporting fleet numbers alongside the correct verdict until the next
+restart.
+
+The retry is also a clean second data point for the atomicity finding. It was a
+**single operation**, it passed the gate, and it landed whole — where the earlier
+two-op version of the same repair shed an edit. Every landing this session that
+went through a single-op plan arrived intact; every partial land followed a
+refused multi-op plan. That is the practical rule until §K's decision is taken:
+**one operation per plan**.
+
+### Lessons written to the channel that actually reads them
+
+The findings above were also minted as three `compose_lesson` concepts, because
+operator notes teach only the operator while the drafter's prompt-build recall
+reads this corpus. They are keyed to the failure classes that recall queries by —
+`anchor_not_found` (copy the anchor verbatim from `origin/dev`; smallest unique
+single-line fragment; 24–76 characters landed 6 of 6 today), `partial_land`
+(a multi-op plan can land a subset; prefer one operation), and
+`typecheck_dangling_reference` (verify each identifier's declaration against the
+enclosing function before asserting scope; never change a return type without its
+signature and call sites in the same plan).
+
+Verified at the consuming layer rather than assumed: querying the drafter's own
+`conceptSearch` path with each class name returns the corresponding lesson
+**ranked first**. Note the standing caveat from §C — this corpus is loaded but
+never credited, so these lessons will be read and will still decay in relevance
+with use until the credit path is wired.
+
+### The `noUnusedLocals` survey, so the root fix is decision-ready
+
+The retraction above identified a compiler setting as the cheaper root fix for
+both shapes the landed gate does not cover, and noted it was blocked on a count
+nobody had. That count now exists. Measured against local checkouts with each
+repository's own `tsc`:
+
+| vessel | baseline errors | violations if `noUnusedLocals` + `noUnusedParameters` enabled |
+|---|---:|---:|
+| goal-host-vessel | 0 | **12** |
+| ias-executor-ts | 0 | **19** |
+| development-vessel | 0 | **75** |
+| activity-api | 0 | **159** |
+
+Every baseline is zero, so each figure is exactly the cost of turning the flags
+on — not pre-existing breakage. **265 violations across the four vessels.**
+goal-host and the executor are trivially tractable; development-vessel, which
+hosts the composer and every landing path discussed here, is 75 and is the
+highest-value target; activity-api is the only substantial one.
+
+A control was required to get these at all: run inside the container the same
+command reports **0 for every vessel**, because `npx` is not on the container's
+`PATH` and `grep -c` over an error message counts zero. That silent zero is the
+same false-zero shape this report documents elsewhere, and it also means an
+earlier in-container typecheck check in this session proved nothing. **O/HIGH**
+for the counts, which were reproduced with each repo's own binary.
+
+### The funnel counted by commits rather than verdicts
+
+§K established that a verdict does not predict a landing, which makes §D's
+verdict-derived rates unsafe to read as work-not-landed. Counting the other end
+instead — substrate-authored commits touching `src/` in development-vessel,
+against `feature_compose` executions, both bucketed in UTC:
+
+| day | commits | attempts | landing rate |
+|---|---:|---:|---:|
+| 09-05 | 36 | 233 | 15.5% |
+| 09-06 | 34 | 242 | 14.0% |
+| 09-07 | 33 | 200 | 16.5% |
+| 09-08 | 26 | 270 | **9.6%** |
+| 09-09 | 32 | 340 | **9.4%** |
+| 09-10 (partial) | 13 | 140 | 9.3% |
+
+Two corrections follow, one of them to this report.
+
+**Substrate commit volume is not collapsing.** §D reported the series as
+"34 → 33 → 33 → 12 → 0", read as a decline toward zero. Measured UTC-aligned
+against `origin/dev`, it is **36, 34, 33, 26, 32** — stable at roughly 26–36 per
+day. The apparent collapse was a measurement artifact: `git log --since` buckets
+by local time while the execution table buckets by UTC, a seven-hour offset that
+moves a morning's commits into the previous day, compounded by reading a partial
+day as complete. **The declining-volume claim is withdrawn.**
+
+**The degradation is independently confirmed by a metric that shares no field
+with the first.** The landing rate steps from ~15% across 09-05 to 09-07 down to
+~9.5% from 09-08 onward, the same window in which the anchor-failure rate
+doubled. Two instruments with no common field — one counting git commits, one
+counting execution metadata — agree on when the composer got worse.
+
+**And the verdict-based figure was roughly right after all.** The commit-derived
+9–16% band brackets §D's field-extracted 12.5% favorable share. So while refused
+work does reach the repository, it is a small fraction of total commits: **the
+non-binding refusal is an integrity defect — unjudged code entering the tree —
+rather than a large distortion of the yield figure.** That distinction matters
+for prioritisation: decision 1 should be argued on correctness, not on throughput.
+
+### What the survey actually found, beyond a count
+
+Enumerating the two tractable vessels turns the decision from a number into a
+work item, and surfaces something the count alone hides.
+
+**goal-host-vessel (12)** — eleven of the twelve are in `src/index.ts`. Two are
+**unused imports of functions that are then invoked nowhere at all**, which is
+the substantive result and required a second check to state correctly:
+
+- `inferGoalTargetShapes` is defined and exported at
+  `goal-target-inference.ts:87`, imported by `index.ts:260`, and referenced
+  elsewhere only in comments. It is **never invoked**. Its sibling on the same
+  import line, `inferGoalTargetDecision`, *is* used — so the module is live and
+  there are two target-inference entry points of which only one is wired.
+- `decideContinuation` is the sole export of `walk-continuation.ts`, imported at
+  `index.ts:276`, and **never invoked** — an entire walk-continuation module with
+  no caller.
+
+A third, `endpointForShape` at `index.ts:397`, is an unused local `async`
+declaration; the name has nineteen other references in the vessel, so this is a
+shadowed or superseded local rather than a dead capability, and it should not be
+counted with the two above. The remainder are unused locals (`winnerVal`,
+`earlyEditVessel`, `editIntentGoal`, `editVessel`, `producedShapesConsumable`)
+clustered in the edit-intent routing region this report examines throughout.
+
+An earlier draft of this section called all three "dead functions with
+load-bearing names, declared and never called." That was imprecise on the
+mechanism — they are dead because their importer never uses them, not because
+they lack definitions — and wrong about `endpointForShape`. The corrected version
+is narrower and better evidenced: **two named capabilities in the goal host's
+reasoning path are fully implemented, exported, imported, and never invoked.**
+
+**ias-executor-ts (19)** — eight are in test files and are trivial; the
+substantive ones are an entire unused import block in `engine.interpolation.ts`
+(TS6192 plus five TS6133 on the same file) and `structuredError` unused in
+`engine.ts`.
+
+This changes the character of the recommendation. Enabling the flags is not only
+a guard against future vacuous landings; on goal-host it would have surfaced
+three functions whose names imply capability that does not execute — the same
+"mechanism present, never connected" pattern this report documents six times
+over, here visible directly in the type checker and never asked. **C/HIGH**, from
+each repository's own `tsc`.
+
+A caution on sequencing: enabling the flags before removing the violations would
+fail typecheck on those vessels and therefore block every compose against them.
+The violations must be cleared first, and because landings are not atomic (§K)
+that clearing is better done by hand than dispatched across files.
+
+### Both ends of the escalation path are gated on the same starved field
+
+Reading goal-host closes the mechanism question behind §K. That vessel **already
+contains** the suppression this report was going to propose, and names the cost
+precisely — *"EDIT-INTENT ESCALATION SUPPRESSED … the byte-anchored route runs no
+semantic judge and lands ungraded"*. Its condition was:
+
+```ts
+const anchorFailure = /old_string not found|no_unique_anchor|anchor_not_found|apply_failed/i.test(failWhy);
+if (namedRegion && verdict && !anchorFailure) {   // suppress
+```
+
+Suppression therefore requires a **named region** — the same field measured at
+113 of 4,357 gaps (2.6%) — exactly as `patch_with_tools`' containment check does
+at the other end. **One field, present under 9% of the time, is the sole gate on
+both the decision to escalate and the only location check at the destination.**
+That is why the unjudged lane receives ordinary work: not because anything routes
+it there deliberately, but because the condition that would hold it back is
+almost never satisfiable. The surrounding design intent is sound and worth
+preserving — for a genuine anchor failure the byte-anchored route *is* better at
+what failed, and suppressing it would leave the gap with no route. The defect is
+that the converse was made conditional on a field that is usually absent.
+
+**One clause inside it was a plain bug, and is fixed.** The condition also
+required `verdict` to be truthy, so a compose returning *nothing* fell through to
+escalation — observed at 06:54 as `verdict=(none) (draining)` followed
+immediately by escalation. A 503 during a restart is not evidence of an anchor
+failure; it is no evidence at all. A single-op change to
+`(namedRegion || !verdict) && !anchorFailure` landed as **`7d97a0e`** at
+07:47:07. It is committed and **not yet loaded** — goal-host's process started at
+05:01:30.
+
+**Widening the suppression generally was deliberately not done, and the reason is
+now quantified.** Commits can be split by staging route from their own messages —
+`patch_with_tools` stages under `apply mitosis-<timestamp>`, `feature_compose`
+under `apply route-edit-…-compose-report`. On `origin/dev` for
+development-vessel, UTC-bucketed:
+
+| day | pwt-staged | compose-staged | escalation share |
+|---|---:|---:|---:|
+| 09-07 | 18 | 5 | **78%** |
+| 09-08 | 8 | 7 | 53% |
+| 09-09 | 11 | 14 | 44% |
+| 09-10 | 6 | 6 | 50% |
+
+**Roughly half of all substrate self-modification in this vessel lands through
+the lane that runs no semantic judge.** That is the true scale of §K, far larger
+than the three partial landings that exposed it: the autonomous commit volume
+this report cites approvingly — 26 to 36 per day — is about half unjudged by
+construction.
+
+It also **contraindicates the obvious fix**. Dropping the `namedRegion`
+requirement would raise the judged fraction toward 100% while cutting landings to
+roughly 50%, moving the landing rate — the number most often quoted as progress —
+sharply down. Anyone proposing it as an improvement should see this table first.
+
+Three remedies, in increasing order of preserved throughput:
+
+1. **Suppress non-anchor escalation.** Judged ~100%, landings ~50%. One
+   condition, and it discards half the working capacity.
+2. **Keep escalation; give `patch_with_tools` the semantic gate `feature_compose`
+   already runs.** Judged ~100%, landings largely preserved. The precedent exists
+   in this codebase — `regionContainmentVerdict` was shared across both routes in
+   August for exactly this reasoning.
+3. **Keep escalation; add only deterministic per-class checks to that path.** The
+   vacuous-edit gate landed as `0896a1c` is the first. Landings fully preserved,
+   judged fraction rises only for the classes covered.
+
+**Option 2 is the recommendation** — it resolves the defect without paying for it
+in throughput. Option 1 is the fallback, not the default. What is not defensible
+is the status quo, in which whether a change is judged depends on whether its
+proposal happens to carry a region string, which it does under 9% of the time.
+
+### Every documented regression this week entered through the unjudged lane
+
+Classifying the known regressions by the same staging-route test:
+
+| commit | what it did | route |
+|---|---|---|
+| `f0cfb91` | inverted a boolean, disabling blind-edit anchor repair; hard anchor-failure went 3.3% → 34.4% and stayed wrong for two days | **unjudged (pwt)** |
+| `550f2f7` | replaced `inertRegexEditRefusal`'s refusal body with `return null`, so a refusal function returned no refusal | **unjudged (pwt)** |
+| `6fcdf40` | injected dead no-op `await … setTimeout` statements into the anchor re-derivation region | **unjudged (pwt)** |
+| `bac7d00` | **repaired** `f0cfb91` | judged (compose) |
+
+**The strength of this should be stated honestly.** Three of three is a small
+sample, and this lane carries about half of all commits, so under a route-neutral
+null the chance of all three landing on it is roughly 0.125 — suggestive, not
+significant on its own. What lifts it above coincidence is that the mechanism is
+specific rather than inferred: the lane's entire recorded verification is
+*"fs_edit applied and typecheck clean"*, and each of these three regressions is a
+one-to-two-line change that typechecks perfectly. A boolean inversion, a
+substituted return value and an inert `await` are exactly the class a compiler
+cannot see and a semantic judge can.
+
+The shape of the traffic compounds it. Of the last fourteen pwt-staged commits,
+every one touches a single file and most change one or two lines. This is not a
+lane carrying large, obviously reviewable features; it carries **single-line edits
+to control flow** — the size at which a diff looks harmless and a judge earns its
+cost.
+
+This moves the decision off values and onto evidence. The trade is not
+"throughput versus tidiness". It is that **half the landings — and the half that
+produced every regression named in this report — arrive with no check capable of
+seeing the defects they contained.** That `bac7d00` came through the judged lane
+is direct evidence the judged path can still do the work.
+
+*Known residual in that change:* the suppression log line still reads "the spec
+names region …", which will print an empty region on the new no-verdict branch.
+Behaviourally harmless, but it is misleading evidence in a log — the same class
+this report documents — and is recorded here rather than left for a reader to
+discover.
+
+### Correcting a conflation: landing rate is not reach, and three measures converge
+
+This addendum has in places used the commit-derived landing rate as though it
+were "reach". That is wrong, and the imprecision propagated. **Landing rate is
+commits divided by compose attempts; reach is whether a goal walk arrived at its
+target.** They are different questions over different populations.
+
+Measured properly, from `goal_execution_paths` — the goal-level record rather
+than the compose ledger:
+
+| measure | population | rate |
+|---|---|---:|
+| goal-path success, all time | 10,658 paths / 24,987 executions | **17.5%** |
+| goal-path success, since 09-08 | 225 paths / 296 executions | **11.5%** |
+| compose landing rate (commits ÷ attempts) | development-vessel, UTC days | 9–16% |
+| field-extracted compose favorable share | 457 reports over 4 days | 12.5% |
+
+The four figures share no fields and come from three different stores — the goal
+path table, git, and the compose report corpus — yet all fall in a **10–18%**
+band. So the shortfall against the documented ~90% expectation is **not an
+artifact of whichever metric happens to be quoted**, which is the failure mode
+this report warns about repeatedly. It is a convergent result, and that
+convergence is stronger evidence than any single number in this document.
+
+The all-time figure (17.5%) exceeding the recent one (11.5%) is also consistent
+with the composer degradation dated to 09-08 by two other instruments.
+
+**A caveat on the goal-path figure:** `successful_executions / total_executions`
+is a path-level success rate, which is a reasonable proxy for reach but is not
+the `reached` verdict itself. The execution table's `metadata.reached` cannot
+substitute — inspecting the rows that carry it shows compose-shaped metadata
+(`apply_failed`, `ops_applied`, `semantic_addresses`), so those are
+`feature_compose` outcomes, not goal-walk verdicts. A field named `reach_graded`
+returns zero on that table and should not be read as "nothing is graded"; it is
+the wrong field on the wrong population.
+
+### How much of the damage each remedy actually buys
+
+The three remedies above were ranked by preserved throughput but not by what they
+catch. Testing the four deterministic checks in `src/vacuous-edit.ts` — all pure
+functions of `(before, after)`, no model call — against the three regressions that
+actually reached `origin/dev` through the unjudged lane:
+
+| regression | shape | caught deterministically? |
+|---|---|---|
+| `550f2f7` | refusal body replaced with `return null` | **yes — `truncatingRewriteReason`** |
+| `f0cfb91` | boolean inversion (`!r.ok` → `r.ok`) | no |
+| `6fcdf40` | injected no-op `await … setTimeout` | no |
+
+**One of the three is catchable for free.** `feature_compose` imports all four
+checks from that module; `patch_with_tools` was importing and running only
+`vacuousEditReason`. Wiring the remaining three costs no latency, needs no model,
+cannot false-block under load, and requires no decision — dispatched as a
+single-op change.
+
+**The other two quantify why option 2 still matters.** A boolean inversion and an
+inert `await` are invisible to every deterministic check and to the compiler;
+they are exactly what a semantic judge exists to see. So option 3 is not a
+substitute for option 2 — it removes roughly a third of the exposure at zero
+cost, and the remainder is what the operator decision is actually buying.
+
+That is the clearest statement this report can make about the trade: **free
+checks close one of three known regressions; the other two require paying for
+judgement on a path that currently carries about half of all landings.**
+
+### The semantic gate was authorized and is live
+
+The operator authorized remedy 2. It landed as **`21da981`** at 08:33:21 and the
+vessel restarted at 08:33:58, so it is loaded and active.
+
+`patch_with_tools` now calls **`verifyPatchAddressesGap`** — the same exported
+function `feature_compose` runs, imported the way `regionContainmentVerdict`
+already is, so the two lanes cannot drift — after the deterministic floors and
+before staging, returning `semantic_reject` on a negative verdict.
+
+Three properties were deliberate, given this affects roughly half of all
+landings:
+
+- **Fails open three ways.** The judge itself returns `addresses: true` when
+  unreachable or unparseable (its own comment records a 2026-07-20 drift to
+  `addresses:false` that "sank otherwise-clean patches" during judge outages);
+  the block is skipped entirely when there is no proposal text or no LLM
+  endpoint; and any throw is caught. A flaky judge cannot wedge landing.
+- **One operation.** Anchored on a single 72-character comment line, with a
+  dynamic import inside the block so no second edit to the import statement is
+  needed. The two-op version of a smaller change had failed for exactly this
+  reason earlier the same day.
+- **Scope verified, not asserted.** A brace walk established that
+  `resolvePatchWithTools` spans 553–1499 and that `baseContent`, `afterSrc`,
+  `beforeSha`, `afterSha`, `resetTarget`, `pointer`, `model` and `llmEndpoints`
+  are all at that function's body depth.
+
+**The throughput cost remains unmeasured and is the open risk.** Escalation fires
+largely on *mechanical* anchor failures, which a judge should mostly pass, but
+some escalated work is material the compose judge already refused and will refuse
+again. If that share is large this converges toward remedy 1 and landings fall.
+The `[pwt-semantic-gate] PASSED` / `REFUSED` log lines make it measurable within a
+day, `compose-drift-tick` will show any effect on the composer independently, and
+reverting is one block.
+
+*Noted without comment on its significance:* the change was staged through
+`apply mitosis-…`, so **the gate that adds judgement to the unjudged lane arrived
+through the unjudged lane.**
+
+### Pre-registered reading of the gate data, written before the first sample
+
+Recorded at 09:05 on 2026-09-10, with **zero firings observed**, so that the
+interpretation cannot be fitted to the result. This report ran two controls
+*after* shipping today and was wrong both times; this is that lesson applied
+forward.
+
+Over the first ~10 firings:
+
+- **REFUSED below ~20%** — the unjudged lane was mostly doing sound work. Keep the
+  gate as cheap insurance, and conclude the reach constraint lies elsewhere; the
+  `anchor_index` item then rises to the top of the remaining list.
+- **REFUSED ~20–60%** — the gate is doing real filtering. Expect the landing rate
+  and the `compose-drift` series to move *down*, and report that as the price of
+  the integrity gain rather than as a regression.
+- **REFUSED above ~60%** — escalation is largely re-judging work the compose judge
+  already refused. The gate has then converged to remedy 1 in effect, and the
+  operator decides whether to narrow the escalation trigger to anchor-failures
+  only.
+
+**The instrument has the exact flaw this report documents throughout, and it is
+flagged before it bites.** `verifyPatchAddressesGap` fails open — it returns
+`addresses: true` when the judge is unreachable or unparseable — while the log
+line prints only `PASSED <file>` with no reason. **So the PASSED count conflates
+"judged and passed" with "judge unavailable, failed open."** A sustained
+100%-PASSED / 0-REFUSED reading is therefore *not* evidence the lane was fine; it
+is precisely the "detector reports healthy" shape catalogued in §I. On the first
+PASSED, cross-check the LLM vessel's journal for a semantic-judge call at that
+timestamp to confirm the judge was actually consulted. If `skipped` dominates
+instead, read the skip message first: the likeliest cause is the endpoint or
+model plumbing in `llmCall(llmEndpoints[0]!, p, model)` with `model` defaulting to
+`"auto"`, which would make this gate build-but-never-connect instance nine.
+Neither is worth pre-emptively fixing; both are worth verifying on first contact.
+
+**A note on the sampling rate.** Organic escalation rides the gap-compose timer
+(~27 minutes) times the share of composes that fail on anchors, so samples arrive
+slowly and a thirty-minute window can legitimately contain none — it did. No
+traffic was manufactured to fill it: dispatched goals carry unusually good
+anchors and would escalate at a different rate than organic work, which would
+bias the very number being measured. **The journal is the instrument and the
+watcher is only an alarm**: `journalctl -u development-vessel --since '08:33' |
+grep pwt-semantic-gate` reconstructs the whole series at any later time, so
+nothing is lost if this session ends before traffic arrives.
+
+### First gate sample: a refusal, and a real one
+
+At 09:38:47, roughly an hour after the gate went live, it fired for the first
+time — and refused:
+
+> `[pwt-semantic-gate] REFUSED repos/activity-api/src/routes/activities.ts: The
+> patch creates invalid syntax by opening a comment block '/*' without closing it,
+> causing a TypeScript parse error (TS1005: '}' expected) and leaving the dead
+> handler body as broken code rather than removing it.`
+
+The target was **activity-api's route file** — the trace store on which the entire
+learning loop depends. Under the previous behaviour this patch would have reached
+staging with `fs_edit applied and typecheck clean` as its entire verification.
+
+Two things this establishes immediately, and one it does not.
+
+**The judge was genuinely consulted.** This was the pre-registered risk: the gate
+fails open, and a `PASSED` line cannot distinguish "judged and passed" from "judge
+unavailable". A **REFUSED** line carries no such ambiguity — the fail-open branch
+returns `addresses: true`, so a refusal can only come from a real verdict. The
+instrument's known weakness does not apply to this reading.
+
+**The unjudged-lane thesis is confirmed on first contact.** The argument for this
+change was that one-to-two-line edits which typecheck cleanly are what a compiler
+cannot see and a judge can. The first thing the judge saw was a patch that leaves
+a file syntactically invalid, aimed at the trace store.
+
+**It establishes nothing about the rate.** n = 1. The pre-registered rule needs
+~10 firings, and one refusal is 100% of a sample far too small to distinguish the
+three bands. It would be exactly the error this report has documented five times
+to read a rate off it. What can be said is qualitative and still worth saying: the
+first sample was not a marginal judgement call but a broken patch to a critical
+file.
+
+**C/O, HIGH** for the event; the rate remains unmeasured and the counters keep
+running.
+
+### The second gate sample exposes the flaw that was pre-registered
+
+At 10:37:50 the gate logged its first `PASSED`, on a patch to
+`feature-compose.ts`. The pre-registered check for exactly this reading was: on
+the first PASSED, confirm the judge was actually consulted, because
+`verifyPatchAddressesGap` fails open and the log line prints no reason.
+
+**It does not appear to have been consulted.** In the 25-second window around
+that PASSED the LLM vessel journal shows **zero** inference calls — against 81
+matching lines across the same session, so the grep is sound and the zero is
+real. And the gate logged **zero `skipped`** lines, which rules out the
+explicit skip path (no proposal text, no endpoint). What remains is the judge's
+own fail-open branch returning `addresses: true` without a verdict.
+
+So the tally after two samples is **1 REFUSED, 1 PASSED-but-probably-unjudged**,
+and the honest reading is that the PASSED count is not yet evidence of anything.
+This is the instrument flaw named in advance, materialising on first contact:
+**a `PASSED` line conflates "judged and passed" with "judge unavailable, failed
+open", and cannot be read as approval.** The REFUSED line remains trustworthy for
+the reason given earlier — the fail-open branch cannot produce one.
+
+The fix is small and known: log `verdict.reason` and `llm_consulted` alongside
+PASSED, so the two cases separate. Until that lands, the gate's protective value
+rests entirely on its refusals, and its passes should be treated as unmeasured
+rather than as clean.
+
+**This also qualifies the earlier claim that the gate "paid for itself".** It
+caught a genuinely broken patch on its first firing, which stands. But a gate
+that fails open on an unreachable judge, in a system where the judge's
+availability is not being asserted anywhere, protects only when the judge happens
+to answer — and nothing currently measures how often that is.
+
+### The second refusal: the gate prevented a silent revert of a same-day fix
+
+At 11:10:49 the gate refused for the second time, and the target is the point:
+
+> `REFUSED repos/development-vessel/src/resolvers/learning-signal-health-observer.ts:
+> adversarial refuters agreed 2/2 (conf 1.00, 0.99): The patch only removes the two
+> constants (SUBGROUP_NAMES and MIN_SUBGROUP_VOLUME) and the loop that…`
+
+Those constants are the per-subgroup logic landed as `fbf2a60` earlier the same
+day — the change that stopped the health observer reporting a false `"healthy"`
+while its teaching channel sat at 0-credited-of-15. **A patch was proposed that
+would have removed it**, and the unjudged lane would have landed that silently, as
+it landed `f0cfb91`, `550f2f7` and `6fcdf40` before it.
+
+**Count correction.** This section previously reported the tally as 2 REFUSED and
+3 PASSED. That was wrong: the counting grep matched any line *containing* the
+string `pwt-semantic-gate] PASSED`, and `fc-plan` entries embed the literal source
+line being edited — so composes planning edits to that very log statement were
+counted as gate firings. Matching on the log **prefix** instead gives the real
+tally: **2 REFUSED, 1 PASSED**, three firings in total, and **zero** since the
+diagnostic loaded at 11:22:38.
+
+The correction cuts in the gate's favour — two of its three firings caught real
+defects — but the published number was still wrong, and the method error is worth
+more than the number: **when counting log events, match the log prefix, never a
+substring, because in a self-modifying system the substring may be source code
+that the system is concurrently editing.** That is a novel variant of the
+false-count class this report documents elsewhere, and it was self-inflicted.
+
+Running tally, corrected, after three firings: **2 REFUSED, 1 PASSED**. The
+refusals are:
+
+1. a patch leaving `activity-api/src/routes/activities.ts` syntactically invalid
+   (`TS1005`), aimed at the trace store the learning loop depends on;
+2. a patch deleting a working fix from the same day.
+
+Both are precisely the class the gate was authorized to catch — small changes that
+typecheck cleanly and that a compiler cannot distinguish from correct work. Neither
+would have been seen by `fs_edit applied and typecheck clean`.
+
+The three PASSED remain uninterpretable until the `llm_consulted` diagnostic
+deploys, so **no rate can be quoted yet** — the pre-registered threshold is ~10
+firings and the pass half of the tally is still unmeasured. What can be said is
+narrower and now twice-evidenced: **on the two occasions the judge demonstrably
+ran, it caught a real defect both times.**
+
+There is also a second-order reading worth stating. The substrate proposed
+deleting its own same-day repair. That is not a gate finding; it is a finding
+about what the authoring lane generates when a gap's remedy has already landed —
+and it is the strongest available argument that judged landing is not optional on
+a path carrying half of all commits.
+
+## M. The glue-layer blocker is a standing trap, not a one-off
+
+Forty-three minutes after §H's blocker was cleared, `substrate-pull-sync` failed
+again in exactly the same way on different files — `rhythm-conduct-tick.ts` and
+`rhythm-seed-tick.ts`, seeded into the container by a concurrent session and
+subsequently tracked by git — and again reported `done — synced=0 skipped=0
+failed=0`. **Any file copied into the container's super-repo that git later
+tracks blocks the glue layer permanently**, and the failure is silent by
+construction: a tick that syncs nothing and a tick that *cannot* sync emit the
+same line.
+
+The consequence was concrete. Commit `22146522`, a complete bootstrap-tier
+implementation of timer-driven rhythm cadence — the very item this report had
+listed as an open operator decision — had been committed and pushed and **had
+never reached the running system**. After clearing the blocker,
+`rhythm-cadence.timer` converged and enabled in one tick and is now scheduled.
+That item therefore moved from "pending decision" to "live" not by a decision but
+by unblocking convergence, which is worth stating plainly: **the report's own
+status list was wrong because it trusted git rather than the container.**
+
+One identity caveat for anyone auditing this history: `22146522` carries the same
+git author as the commits made during this investigation but was authored by a
+concurrent session sharing the worktree. `git log --author` does not distinguish
+them, so authorship in this repository is not a reliable attribution of agency.
+
+## Method note (evidence discipline)
+
+Nine intermediate readings in these sessions were retracted before publication,
+each killed by a control against an independent source, never by re-reading
+the same telemetry: a journal-grep refusal rate wrong by 3–10× (lane scoping),
+three landing-conversion claims built on a field that only began populating
+mid-window (`landed_vessels`), a "restoration evaporated" self-accusation built
+on a 2-hour noise slice, and six operator metrics that measured the wrong
+population. These retractions are themselves evidence for the report's §19
+critique: this system's own reporting channels — `goal_status`, `resolution`
+strings, closure counts, trace metadata fields — are not reliable instruments
+for measuring it, and any capability claim quoted from them without an
+independent cross-check (git history, field extraction, read-back controls)
+should be presumed wrong until controlled.
+
+---
+
+## N. The ias-executor block: five refuted hypotheses and the actual cause
+
+**Status: code-demonstrated. Confidence HIGH (reproduced with a negative
+control against the real function).**
+
+Every compose against `repos/ias-executor-ts` was refused. Section M attributed
+this to the compose clone omitting `dist`, and that attribution was wrong. So
+were four others. The full list of hypotheses I asserted and then killed:
+
+1. **Missing `node_modules` in the clone.** Refuted — every live clone has it.
+2. **Concurrent-compose contention.** Refuted — no correlation with clone count.
+3. **Load-sensitive test timeouts.** Refuted — the gate re-runs failures in
+   isolation precisely to defeat this (`runSuiteOnly`, added 2026-08-29).
+4. **Missing `dist` in the clone.** Refuted by simulation: a dist-less tree
+   produces 361 pass / 15 fail / **0 errors**, versus the compose environment's
+   134 / 32 / **30 errors**. It reproduces the file count (46) and nothing else.
+5. **A stale post-land baseline.** `post-land-baseline/ias-executor-ts.json` is
+   dated Aug 25, sixteen days stale, while every repo that lands has a fresh
+   one — a compelling self-sealing story. Refuted by reading the consumer:
+   `BASELINE_MAX_AGE_MS` (24h) already nulls a stale baseline, and
+   `computeNewlyFailing(null, …)` returns `[]`, so it fails open. The guard
+   exists and works.
+
+None of these was the cause, and **the test suite was never involved at all.**
+The refusal reason, extracted from the journal rather than inferred:
+
+```
+verdict=REFUSED (vacuous plan refused — diagnostic-only edit: every changed
+line is a logging call (1 line(s), e.g. `console.warn(`[activity-api-provider]
+getTemplate(${templateId}) non-2xx $`)
+```
+
+This is the `vacuousEditReason` diagnostic-only rule in
+`repos/development-vessel/src/vacuous-edit.ts:428`. The change under dispatch
+was *itself* a request to add diagnostic logging to
+`ActivityApiTemplateProvider.getTemplate`'s silent `return null` paths — so the
+gate refused it for being exactly what it was asked to be.
+
+### The carve-out counts the wrong thing
+
+The rule is not naive; the substrate had already extended it. A block comment
+above the check reasons that "a diagnostic that distinguishes more states is
+repair, not quietening," and adds `_distinguishesMore` to let such edits
+through. But that predicate is implemented as a count of `?` characters:
+
+```ts
+const _logBranches = (ls: string[]) => ls.reduce((n, l) => n + (l.match(/\?/g) ?? []).length, 0);
+const _distinguishesMore = _logBranches(added) > _logBranches(deleted);
+```
+
+Adding a log line where the branch previously produced **none** is the largest
+possible increase in distinguishable states — silence to signal — and it scores
+`0 > 0 === false`. Measured directly against the real function, before = the
+silent non-2xx branch:
+
+| case | edit | verdict |
+|---|---|---|
+| A | add one `console.warn` where the branch was silent | **REFUSED** |
+| B | the same warn, containing one ternary | **ALLOWED** |
+
+Identical information. The discriminator is a `?` character.
+
+### Why the obvious fix is not proposed here
+
+Admitting all pure log additions would remove the rule's real value: catching a
+drafter that answers a substantive request with a print statement. That failure
+mode is common and the rule does stop it.
+
+The actual discriminator is not in the diff at all — it is whether the *goal*
+asked for a diagnostic. The gate is handed only `(before, after)` and cannot
+see the request, so no purely diff-local predicate can separate "the drafter
+dodged the work" from "the work was to add a log." Passing the gap summary into
+the rule is a change to a compose gate and is left as an operator decision.
+Filed as `vacuous-gate-refuses-adding-a-log-where-code-was-silent`, deliberately
+**without** a falsifier: the predicate that would close it depends on a decision
+not yet made, and arming a predicate against an unmade decision is how a gap
+gets measured closed by a remedy that never happened (§F).
+
+### The method failure this represents
+
+Five hypotheses, each asserted with more confidence than its evidence carried,
+all about the test environment — because the first artifact I read was a compose
+report showing a failing suite. The refusal reason was in the journal the whole
+time, one grep away, and it named a different subsystem. **A gate's collateral
+output is not its verdict.** The suite ran and failed because the clone was
+mid-refusal, not the other way round; I read the symptom as the cause and then
+spent four experiments defending it.
+
+The rule this generalises to is the one already in §19 in a different dress:
+*read the verdict the system actually emitted before modelling why it emitted
+it.* Every one of the five hypotheses was falsifiable against a string the
+system had already printed.
+
+*This addendum is not covered by SHA256SUMS.json, which attests the 09-09
+artifact set only.*
