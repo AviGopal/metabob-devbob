@@ -3022,5 +3022,62 @@ telling us so 18,784 times, and masking stops the thrash immediately whereas the
 predicate in (1) only stops *future* instances of the class.
 
 
+---
+
+## AC. The denominator, and the first thing it says
+
+`80e45a2a` landed the §AA fix — an additive `else` emitting
+`posterior variant update APPLIED` at info, beside the existing `SKIPPED` line.
+Substrate-authored via `apply_proposal_as_patch` + `vessel_mitosis_cutover`, no
+operator hands on the edit. The diff is byte-for-byte what the goal specified.
+Deployed by the cutover restart at **14:17:59**, two seconds after the commit,
+and confirmed behaviourally rather than by its verdict: `APPLIED` lines appear in
+the journal.
+
+**First measurement over the 12 minutes following deployment:**
+
+| | count |
+|---|---|
+| `APPLIED` | **14** |
+| `SKIPPED` | 172 |
+| **applied share** | **7.5%** of 186 decisions |
+
+**92.5% of posterior decisions decline to move a belief.** That is the number
+§AA could not compute, and it took a one-line change to obtain.
+
+The tier gate behaves exactly as designed: **all 14 applied updates are
+`tier_class: all_stochastic`**, and none are deterministic. Twelve carry
+`reach_verdict: reached`.
+
+### What earns credit — the part worth looking at twice
+
+Across a slightly wider 14-minute window, the applied updates resolve to **only
+five distinct activities**:
+
+| activity | applied updates |
+|---|---|
+| `feature_compose` | **10** |
+| `vessel_mitosis_cutover` | 3 |
+| `universal-tool-fallback` | 2 |
+| `satisfier:docs_align_tick` | 1 |
+| `ribosome-extract` | 1 |
+
+Ten of seventeen are `feature_compose`, and three more are the cutover that lands
+what compose drafts. **The learning loop's belief updates are concentrated almost
+entirely in the self-development machinery itself** — the substrate is learning
+about the act of composing code changes, and about very little else.
+
+**This is preliminary and must not be over-read.** n=17 over fourteen minutes, in
+a window that contains this session's own operator dispatches, which are
+themselves `feature_compose` traffic. The concentration could be an artifact of
+who was dispatching. The measurement that settles it is the same one, over a
+window with no operator activity in it — which is now possible to take, and was
+not this morning.
+
+That is the honest summary of the whole change: it did not improve anything. It
+made one rate observable, and the first thing the rate says is a question worth
+asking properly.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
