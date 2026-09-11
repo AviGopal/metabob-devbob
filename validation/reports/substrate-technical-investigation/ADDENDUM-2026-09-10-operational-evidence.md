@@ -2528,5 +2528,100 @@ pointed at a healthy vessel. Only `ActiveEnterTimestamp` moving between two
 consecutive checks gave it away.
 
 
+---
+
+## X. Two substrate-authored repairs, and what the second one taught
+
+**Status: landed, deployed, diff-verified; one behaviourally confirmed.**
+
+Section W confirmed the development-vessel deadlock and recorded it as blocked,
+on the reasoning that the gated path needs `feature_compose` and the completion
+plane is credential-dead. **That reasoning was wrong**, and the error is worth
+naming: §U had already measured 17 commits landing overnight through the
+rate-limited free lane. "Every provider errors" is not "nothing completes."
+Starved is not dead, and the cheapest possible test — dispatch a one-token edit
+and see — was available the whole time.
+
+Dispatched, both landed with no operator hands on the edit.
+
+### 1. The deadlock repair — behaviourally confirmed
+
+`61a6e46`, `apply_proposal_as_patch` + `vessel_mitosis_cutover`:
+
+```diff
+-        : Bun.spawnSync(["systemctl", "start", "gap-compose.service"], …);
++        : Bun.spawnSync(["systemctl", "start", "--no-block", "gap-compose.service"], …);
+```
+
+Verified at four layers rather than by its verdict:
+
+| check | before | after |
+|---|---|---|
+| `/health` non-200 | 3 consecutive 10s timeouts per cycle | **0 of 96 samples** over 8 min |
+| slowest response | 10.0s (timeout) | 0.20s |
+| `UNHEALTHY: development-vessel` | essentially every tick | **0 of 3 ticks that ran** |
+| watchdog restarts | every 3 min | **0** |
+| 30s `gc-tick` | 0 fires per 2m22s window | **17 fires**, correct cadence |
+| gap-compose spawn | `failed to start (exit unknown)` | **`pickup triggered`** |
+
+The last row closes the causal loop: systemctl now enqueues and returns, the
+trigger still fires, and the loop is never seized — which was the whole argument
+for `--no-block` over deleting the call.
+
+### 2. A suppressed spawn was logged as a failure
+
+The residual `failed to start` line after the first fix was not a failure at
+all. When `unitAlreadyBusy` suppresses the spawn, `proc` is deliberately `null`;
+`proc?.exitCode` is then `undefined`, `undefined !== 0` is **true**, and the
+error branch fires. The guard working as designed announced itself as a fault —
+and until an hour earlier, that same string had been the signature of a genuine
+deadlock. One message covered two opposite states.
+
+Fixed to `if (proc !== null && proc.exitCode !== 0)` (`4783f38`), first
+occurrence only; the genuine-failure path is untouched. Deployed, diff-verified,
+**not yet behaviourally confirmed** — the guard branch had not been exercised in
+the window available.
+
+A note on the earlier diagnosis: during the stall windows the `NOT started` line
+was absent, so those messages were genuine `spawnSync` returns and §W's
+conclusion stands. But that check was made *after the fact*. The right answer
+was reached with an instrument that could not have reported being wrong.
+
+### The lesson: a unique anchor supplied is not a unique anchor used
+
+The goal for the second fix carried an explicit warning that
+`if (proc?.exitCode !== 0) {` appears **twice** in the file, and supplied a
+five-line verbatim span — including the unique `spawnSync` line — precisely to
+disambiguate.
+
+`feature_compose` refused anyway: `verdict=UNFAVORABLE … apply_failed,
+rolled_back: no_unique_anchor: refused fs_edit — planned anchor is non-unique`.
+**The planner chose its own anchor rather than using the span provided.**
+
+This qualifies a standing operator belief — "give a drafter verbatim anchors,
+not descriptions." Verbatim anchors remain necessary, and they are what let the
+*escalation* apply the change correctly. They are not sufficient: supplying a
+unique multi-line span does not constrain what the planner selects as its
+anchor, so uniqueness must hold for the *planner's* likely choice too, not just
+for the text handed over.
+
+### The refusal was non-binding, again
+
+After the rollback, `patch_with_tools` escalated and landed the identical
+change — commit attributed to `pwt-development-vessel-substrate-gap.ts-7601cb95`.
+This is the third independent observation of a refused compose landing anyway
+through the escalation lane, and the outcome here happened to be correct only
+because the change was a one-token condition edit that typechecks.
+
+### The verdict string mixes provenance
+
+The dispatch reported `reached: true`, `landed 4783f38…`, **and**
+`UNFAVORABLE … apply_failed, rolled_back` in a single reason string. Every
+clause is locally true — compose did fail and roll back, escalation did land it,
+the sha is real and the diff correct — but a reader of the reason alone would
+conclude the change never landed. The reach verdict is right by outcome; its
+explanation describes only the failed half. **Read the diff, not the reason.**
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
