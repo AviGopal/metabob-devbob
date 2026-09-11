@@ -229,6 +229,23 @@ Filed as `autonomous-landings-are-never-post-verified` (high): the missing leg
 is exactly the difference between substrate-landed and substrate-verified
 repair, and its closure is deliverable 5's remaining work.
 
+Sharpened by direct probe: the `test_suite` resolver invoked standalone
+returns `ran:true, 867 pass, 0 fail` on the landed goal-host tree at `abb07ea`
+(which also independently confirms all four landed fixes leave that suite
+green). So the resolver and shell producer work; the cutover's in-process call
+fails for a reason its logging *discards* — it projects only `ran/pass/fail`
+and drops the structuredError `detail`. The gap was updated with this evidence
+and, deliberately, **no verbatim patch this time**: the reduced-operator-help
+rung is letting the compose lane draft from a diagnosis. It competes in the
+normal selection pool (~400 open gaps); a watcher is armed on its pick and on
+the qualification rhythm's second firing.
+
+The envelope's adaptation-mode limitation is filed as its own gap
+(`qualification-adaptation-probes-have-no-generator`): the seeded family goal
+is fixed-text, so only reuse-mode metrics accrue until the system grows a
+per-firing operand generator (law 13 — an operator rotating operands by hand
+would institutionalize the operator as preprocessor).
+
 **The qualification envelope** ([docs/QUALIFICATION.md](../../../docs/QUALIFICATION.md),
 timeless per law 9) was wired through the shaped cadence path per law 5 — a
 `timeShapedRhythm` (family `qualification`, parameters mirrored from the
