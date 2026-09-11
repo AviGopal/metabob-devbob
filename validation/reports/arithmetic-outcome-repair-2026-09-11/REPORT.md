@@ -83,12 +83,40 @@ to the relay" would green on a standalone 56088 with the send unverified. Small
 surface, but it is exactly the class the goal directive forbids; the next compose
 cycle on this file should extend the verb list and its test.
 
-Milestone honesty: by the directive's strict consumption rule, the reuse leg is
-only partially closed. The traversal repeated successfully and the α credit was
-applied, but selection demonstrably did not consume it — all three walks
-re-derived the identical attempt sequence. Repetition-with-credit, not learned
-reuse; the filed inference gap is the blocker and the entry point to the
-composition-ladder deliverable.
+## The reuse leg, closed the same day
+
+The "selection does not consume the credit" premise was **wrong**, and the filed
+gap was corrected before the autonomous composer could act on it (a
+false-premise gap is retried forever). The journal shows selection consults the
+goal-path store on every walk; acceptance is gated by the *shaped*
+`pathwayReusePolicy` (minSuccessful=3, minTotal=5), and the arithmetic pathway
+simply had not earned that yet ("pathway reuse: 3 recommended, 0 accepted").
+The re-derivation was the designed disposition for an under-evidenced pathway,
+not a severed junction.
+
+Confirmed by intervention, not code change:
+
+- Repeated dispatches accumulated `goal_execution_paths` counters for the goal
+  (hash 471aac56733f5f64) to 4/5 on `[universal-tool-fallback]` and
+  `[satisfier:shellResult]`.
+- The next dispatch (c605d88f, 16:22:06 UTC) logged
+  `pathway reuse: accepted 1-step pathway via goal_hash (4/5 reached)` →
+  `REUSE-BEFORE-DERIVE — running it directly and skipping the walk` →
+  `REUSE LINEAGE (transmitted) … reached=true`, and delivered `20413` in ~4 s
+  versus ~60–90 s of fresh derivation — zero llm/web detours.
+- Fresh operands (f20cb489, 613×287): tier-2 rebind adapted the cached verified
+  command to the new inputs (`bun -e 'console.log(613 * 287)'`, selected from 68
+  candidates), one-step chain, deterministic green, α +2 — first-mile
+  adaptation per the CLAUDE.md middle expectation. Partial on delivery: the
+  walk-path answer renderer wraps the correct value in markdown (the known
+  formatting defect; the floor path delivers bare integers).
+- Along the way the system self-filed `lost-reached-verdict-walk-satisfier-1-…`
+  when a reach-patch matched no row — self-detection firing without operator
+  involvement.
+
+The gap is closed with `close_basis` naming the journal lines and counters. Two
+oracle labels record the reuse and adaptation verdicts
+(fzxw5qc3p2..., f6u8iylf2e...).
 
 ## Evidence
 
