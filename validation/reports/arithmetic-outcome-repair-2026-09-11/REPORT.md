@@ -114,9 +114,29 @@ Confirmed by intervention, not code change:
   when a reach-patch matched no row — self-detection firing without operator
   involvement.
 
-The gap is closed with `close_basis` naming the journal lines and counters. Two
-oracle labels record the reuse and adaptation verdicts
-(fzxw5qc3p2..., f6u8iylf2e...).
+Closure verification (both checked, not assumed):
+
+- **The composer race was won.** gap-compose picked the false-premise gap up
+  within 1 s of the write (16:03:14), but no fc-plan, semantic-gate, or landed
+  commit ever named it — the queued compose was dropped in the dev-vessel's
+  lossy restarts before drafting anything. Nothing from the false premise
+  touched selection code.
+- **The close persisted as `status: closed`, but `resolution` and `close_basis`
+  were silently discarded by the write path** — a live instance of the known
+  "close_basis survives on 0.5% of closures" class. The closure evidence
+  survives only in the gap's summary text. Two oracle labels record the reuse
+  and adaptation verdicts (fzxw5qc3p2..., f6u8iylf2e...).
+
+Scope honesty for the ladder deliverable: what is demonstrated here is a 1-step
+pathway on trivial goals plus command-level adaptation. The composition ladder
+proper (useful multistep task, ribosome extraction, boundary adaptation,
+composition-with-composition) remains open — the directive itself warns that
+high reach on trivial goals is a gamed metric. The natural next unit is the
+self-repair cycle: the walk self-filed `lost-reached-verdict-…` when a
+reach-patch matched no row (it deduplicated into an existing instance of the
+same class from three days earlier — a recurring class), which is a
+substrate-detected failure with a substrate-generated gap: deliverable 5's
+entry, to be watched and coaxed rather than hand-completed.
 
 ## Evidence
 
