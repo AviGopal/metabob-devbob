@@ -2160,5 +2160,106 @@ may fall before it rises. That is the instrument becoming honest, not the system
 degrading — and distinguishing the two requires counting landings at the git
 layer, never from a compose report.
 
+---
+
+## U. The next reading: an unreadable experiment and a credential floor
+
+**Status: measured. Confidence HIGH on the blocker, NONE on the experiment.**
+
+Section T closed on a deliberate intervention (the `-0.15` recommit down-weight,
+`9b305d2`) with its pre-baseline recorded and a marker dropped at
+`2026-09-10 20:50:43Z`. This is the read, ~14.7 hours later.
+
+### The experiment cannot be read
+
+Matched 14.7-hour windows either side of the marker:
+
+| | compose attempts | recommit share | landings (git layer) | landings/attempt |
+|---|---|---|---|---|
+| PRE (09-10 06:10 → 20:50) | 128 | **35.9%** | 41 | 32.0% |
+| POST (09-10 20:50 → 09-11 11:32) | 119 | **19.3%** | 17 | 14.3% |
+
+The recommit share fell as the penalty intended. The outcome moved the wrong
+way. **Neither number is evidence**, for two independent reasons:
+
+1. **The provider plane degraded across the boundary.** `exhausted` events went
+   984 → 5148 (5.2x) and provider errors roughly doubled. A storm on that scale
+   changes which composes produce a report at all, so it moves the experiment's
+   numerator *and* its denominator — including the recommit share, whose fall is
+   therefore not clean evidence of the mechanism either.
+2. **The windows differ in operator activity.** PRE is the window in which
+   operator-directed repair goals were being dispatched; several of its 41
+   landings are that directed work. POST is unattended overnight traffic.
+   Landings-per-attempt was never comparable between them, confounder or no.
+
+Recorded, per law 12: **the penalty stays in place** — reverting on confounded
+data is a second uncontrolled intervention. The re-measurement requires a
+matched pair of windows that are both provider-healthy and both operator-quiet,
+and those conditions must be pre-registered, not checked afterwards.
+
+### The floor underneath everything: no usable LLM credentials
+
+Current state, sampled over the most recent two hours, every provider path:
+
+| path | status | recoverable by retry? |
+|---|---|---|
+| `openai` (OpenAI-compatible route) | **402** — no credit | no |
+| `openai` | 429 — rate limited | yes |
+| `openai` | **404** — model is paid-only now | no |
+| `anthropic` | **401** — API key is invalid | no |
+
+Three of the four are terminal. The resolver's own summary of the state is
+accurate: *"no llm arm is currently servable (0 policy arm(s) checked);
+last-resort model 'claude-sonnet-5' is also unwilling (no key, cooling, or cold)
+— refused instead of dialling a known-dry model"*, followed by *"all completion
+providers cooling — de-advertising `llm_completion` until quota returns"*.
+
+**This corrects an earlier operator note.** The failure is *not* a stuck
+600-second cooldown with zero re-advertisement: the vessel re-registers with
+discovery continuously (observed at 11:35:52 and 11:36:00), de-advertises the
+shape honestly while dry, and re-advertises when it is not. The machinery is
+behaving correctly. It has nothing to dial.
+
+Nor is the refusal a guard defect. `last-resort.ts` already distinguishes "all
+*arms* are cooling" from "nothing is *routable*" — it carries a `routableModels`
+set precisely so that a live model outside the arm policy is found before
+refusing, a case its own comments record having been observed. It refuses only
+when the default is dry *and* no routable model is willing.
+
+### One internal 401 burst, attributed and closed
+
+A 13.7x jump in raw `401` tokens looked like the 09-10 fleet-credential repair
+regressing. It was not, and the distinction only appears in the line bodies:
+of 517 `401`s in the POST window, **486 were internal** —
+`[DiscoveryRegistrationLoop] register failed: 401 — vessel will be unreachable
+via discovery` — and all 486 fall inside a **75-second** retry storm
+(22:45:49 → 22:47:04), with none since. Discovery reports 12 registered vessels
+and llm-resolver re-registers on schedule. The remaining 31 are the external
+anthropic 401.
+
+Counting a bare status token across a log conflates an operator-actionable
+external failure with a self-inflicted internal one. Bucket by the line body.
+
+### Consequence for the reach contract
+
+Reach over the POST window: **9 achieved / 181 labels = 5.0%**, with edit goals
+at 3/125 = **2.4%**. Both are consistent with §T's 7.9%/2.1% given a smaller,
+provider-starved sample; neither is a movement to interpret.
+
+The ~90% contract is not approachable from here, and the reason is not a
+mechanism defect this session can repair. The drafter, the walk's LLM resolver
+and the compose lane all require completions. **Restoring provider credit or a
+valid API key is a precondition, not an optimisation** — it is the class of
+intractable blocker the operator role reserves for intervention, since no
+substrate-authored fix can mint its own credentials.
+
+The `pending-verdict` fabricated-verdict removal from §T is verified clean: zero
+occurrences remain anywhere in the goal-host checkout, goal-host restarted at
+09-11 05:03:45Z, and exactly one historical row exists — written at 21:07:46Z,
+before the fix deployed, by the fabricated call labelling the goal that removed
+it. The gap's falsifier must therefore be **time-bounded** ("no such row created
+after the deploy timestamp"); as originally filed, that one historical row makes
+the predicate unsatisfiable and the gap immortal.
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
