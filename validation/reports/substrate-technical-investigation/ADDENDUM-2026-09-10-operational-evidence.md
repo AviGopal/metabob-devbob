@@ -2253,6 +2253,31 @@ valid API key is a precondition, not an optimisation** — it is the class of
 intractable blocker the operator role reserves for intervention, since no
 substrate-authored fix can mint its own credentials.
 
+### Starved and thinning, not dead — and the distinction is load-bearing
+
+A reader will notice the tension immediately: the POST window reports every
+provider path failing, and also 119 compose attempts and 17 landings. Both are
+true, and the resolution is the rate.
+
+The 17 landings are spread across the whole 14.7 hours, ending 37 minutes before
+the measurement — not clustered at the start, which is what a plane that died
+partway through the window would look like. They thin as it goes: **9 landings
+in the first 5 hours (1.8/h), 3 in the last 6 (0.5/h).** So requests are still
+getting through, intermittently and less often.
+
+The mechanism is the one error class that self-heals. 402, 401 and 404 are
+terminal — a retry against an empty balance, an invalid key or a
+now-paid-only model returns the same answer forever. **429 is different**: a
+rate-limited free lane refuses now and serves later, so a small share of traffic
+completes on retry. That trickle is what landed 17 commits, and it is why the
+plane reads as "cooling" rather than "down".
+
+Calling this a dead plane would overstate it; calling it healthy would miss that
+the trend is downward and that three of four error classes cannot recover
+without operator action. **Starved and thinning** is the accurate description,
+and it is also why the reach figures in this section are not worth
+interpreting — the sample is drawn from whatever squeezed through a closing gap.
+
 ### The blocker, confirmed at the provider and not through the vessel
 
 A vessel's own error log is not evidence about the vessel's providers. Each
