@@ -2788,5 +2788,87 @@ The surviving claim is only this: **a single-op, file-naming, evidence-carrying
 goal, retried on transient capacity, landed three for three on a plane yielding
 2.4% to autonomous traffic.** Why is now open, and lever 2 is not the answer.
 
+---
+
+## AA. The posterior decision logs only its refusal
+
+**Measured 2026-09-11, a six-hour window (08:00Z →) on the live substrate.**
+
+A design question about testing the full execution→learning cycle sent me to
+`repos/activity-api/src/lib/posterior-update.ts:1076`, the point where the
+learning loop either moves a Thompson posterior or declines to. The journal for
+that window holds:
+
+| line | count |
+|---|---|
+| `posterior variant update SKIPPED` | **4268** |
+| any line recording an **applied** update | **0** |
+
+There is exactly one `logger.info('posterior variant update …')` call site in the
+file, and it sits inside the skip block. **The applied branch is silent.**
+
+That makes the 4268 a numerator with no denominator. Nothing in the logs
+distinguishes 4268 skips out of 4300 decisions from 4268 out of 400000 — which
+is to say the simplest question one can ask about the learning loop, *what
+fraction of posterior decisions move a belief*, is unanswerable from the
+instrument built to answer it. Recovering a denominator meant leaving the logs
+entirely: 231 rows in `variant_performance_metrics` carry an `updated_at` inside
+the window, out of 4659 arms. That is distinct **arms touched**, not **decisions
+taken**, so it does not answer the question either — it bounds it.
+
+This is the same defect class as §Y's keyless provider, inverted. There, a loop
+logged every provider it constructed and said nothing about the ones it skipped.
+Here, a branch logs every refusal and says nothing about the ones it applied.
+**A branch that instruments only one side of itself cannot produce a rate, and
+rates are the unit in which learning behaviour is judged.**
+
+Dispatched as a goal (additive `else`, mirroring the skip line field-for-field on
+the five fields that make the two comparable).
+
+### The control that killed the more interesting hypothesis
+
+The skip reasons looked, at first, like a much bigger finding:
+
+| reason | count | share |
+|---|---|---|
+| `reach_ungraded` | 2756 | 64.6% |
+| `all_deterministic` | 1512 | 35.4% |
+| `information_yield_idle` | 0 | — |
+
+Two thirds of posterior decisions declining because the trace carried no reach
+verdict reads as a severed verdict→belief junction — the exact failure §T
+recorded being repaired on 09-07. And of the skipped traces, 2484 classified
+`all_stochastic` and 272 `mixed`: eligible by tier, blocked only by grading.
+
+Before publishing that, I broke the ungraded half down by activity. It is
+**86% infrastructure**:
+
+| activity | ungraded executions |
+|---|---|
+| `validator-dispatch` | 1089 |
+| `slot-binding` | 225 |
+| *(98 others)* | 218 |
+
+1721 of 3262 executions in the window (52.8%) carry a reach tag. The 47.2% that
+do not are dominated by internal machinery that has no goal verdict to carry —
+and `posterior-update.ts:995` says so explicitly: an ungraded outcome is skipped
+so that it is *neither credited nor blamed*. **The skip is correct. There is no
+severed junction here.**
+
+Worth stating plainly because the wrong version was one query away from being
+written down: the aggregate number was real, alarming, and meant nothing until
+it was disaggregated. A rate over a population you have not partitioned is a
+claim about a population you have not looked at.
+
+### A third observation, incidental
+
+`run_goal_async` through the MCP cockpit returned *"could not find goal-host-vessel
+via discovery"* while goal-host-vessel was `active`, answering `/health` as
+`healthy`, and advertising `goal_execution` as the first entry in its shape list.
+The dispatch succeeded immediately against the vessel directly. The cockpit's
+discovery lookup and the vessel's own registration disagree; the cockpit reports
+this as the vessel being absent.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
