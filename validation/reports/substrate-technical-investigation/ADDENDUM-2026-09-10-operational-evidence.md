@@ -3642,5 +3642,95 @@ precisely why the one-string-two-states class is filed as a gap rather than thre
 anecdotes.
 
 
+---
+
+## AK. The drafter now sees real verdicts — and every mechanical check passed on noise
+
+The §AI gap, repaired under the bounded design the operator chose: leave the
+corpus and the mirror alone, augment the *prompt* with at most one line per
+failure class, drawn from the specific reasons already on disk.
+
+Landed `e1a43d83`, then `cdb936e9`. Both verified by reading the rendered block.
+
+### It took three attempts, and the failures were mechanical, not conceptual
+
+| attempt | outcome |
+|---|---|
+| 25-line replacement | `TS1005: 'try' expected` — brace structure broken |
+| 25-line replacement | adversarial refuters 2/2 @ 0.90: **inserted instead of replacing**, leaving a duplicate `if (found.length > 0)` and two returns |
+| 9-line replacement, both prior failures named in the goal, post-condition stated | **landed** |
+
+The refusal in row 2 was **correct** — a real defect, caught cleanly. Worth
+recording beside §AG, where the same judge was factually wrong about the
+posterior-logging patch: it is not uniformly unreliable.
+
+The pattern in rows 1–2 is mine. A large replacement block gives more ways to
+mangle structure. The version that landed is a third the size, has no nested
+`try`/`catch` block, and states a checkable post-condition ("after this edit
+`if (found.length > 0)` must appear exactly once").
+
+### ⚠ Every mechanical check passed on output that was two-thirds noise
+
+After `e1a43d83` landed:
+
+- `grep -c obsBlock` → 2 ✓
+- `tsc --noEmit` → clean ✓
+- post-condition (`if (found.length > 0)` exactly once) → ✓
+- working tree → clean ✓
+
+And the block rendered **41 lines, not 8**. For `typecheck_dangling_reference`,
+`syntax_break` and `verify_failed` the `reason` field holds the **entire build
+log**, so a 300-character slice that preserves embedded newlines turns one class
+into a dozen lines of `== install ==` / `DRYRUN_EXIT=0` / `@types/bun@1.3.14` —
+injected into every drafter prompt under a header promising verbatim judge
+verdicts.
+
+`cdb936e9` collapses whitespace runs before truncating. Re-rendered: **8 lines,
+one per class.**
+
+This is the strongest case this session for verifying at the layer that consumes
+the artifact. Four independent mechanical checks passed. The defect was visible
+only in the rendered text — the same discipline I abandoned in §AH, where I
+compared query results by md5 and shipped a regression.
+
+### What it now contributes, stated without inflation
+
+Useful, and exactly the intended class of information:
+
+```
+- semantic_reject: The patch adds redundant warning logic without fixing the silent capacity loss issue
+- compose_execution_failure: {"error":"no_unique_anchor: refused fs_edit — planned anchor is non-unique …
+- anchor_not_found: {"error":"old_string not found in file. The closest real text is lines 3321-3326 …
+```
+
+Still wasted, 3 of 8 lines: the build-log classes spend their line on the install
+preamble, because the informative `error TS…` line falls outside a 300-character
+head-slice. Bounded and harmless now, but teaching nothing. A targeted extraction
+of the error line is the obvious next improvement and is **not** yet made.
+
+### A gate that refuses minimal edits
+
+The `cdb936e9` change was first dispatched as a **one-line** edit and refused:
+*"vacuous edit: every added line is a declaration whose binding is never used
+(obs)."*
+
+The binding is used — on the next line, in `const obsBlock = obs ? … : ""` —
+which was correct and therefore unmodified, and so absent from the diff. **The
+vacuity check analyses added lines in isolation**, so any minimal edit to a
+declaration whose consumer sits on an unchanged line reads as an unused binding.
+
+That penalises the single-op surgical edit, which is this lane's most reliable
+unit of work, and pushes the author to widen diffs artificially — which the table
+above shows measurably raises the mangle rate. The workaround used here was to
+re-issue the identical change as a two-line replacement whose second line is
+byte-identical to the original.
+
+Filed as `the-vacuity-check-reads-added-lines-in-isolation-and-refuses-minimal-edits`,
+with a falsifier stating explicitly that widening diffs does not close it. It is
+the second mechanically distinct false positive from this same rule — the first,
+on 2026-09-10, refused a change whose purpose was adding logging — which is what
+makes it a class rather than an incident.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
