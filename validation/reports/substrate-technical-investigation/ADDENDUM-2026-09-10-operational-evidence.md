@@ -2805,7 +2805,34 @@ that window holds:
 | any line recording an **applied** update | **0** |
 
 There is exactly one `logger.info('posterior variant update …')` call site in the
-file, and it sits inside the skip block. **The applied branch is silent.**
+file, and it sits inside the skip block.
+
+**Correcting my first reading of this, which was too strong.** I initially wrote
+that no instrumentation of the applied branch exists. It does. Line 1330 calls
+`emitPosteriorUpdateMetric(summary)` unconditionally, past both branches, and
+`summary.skipped_reason` is deliberately `undefined` when the update applied
+(`:1327`, documented at `:242` — *"Absent when the UPDATE ran normally"*). That
+is a complete per-decision record, and it is the right design.
+
+It produces nothing, for two independent reasons, either of which alone would be
+sufficient:
+
+1. **It is `logger.debug`** (`:264`), and the live deployment runs at info. The
+   journal holds **0** `posterior_update` lines across the same six hours that
+   hold 4268 `SKIPPED` lines. The refusal is at info; the complete record is
+   dark.
+2. **The function drops the discriminating field.** It forwards
+   `failure_mode_type`, `alpha_delta`, `beta_delta`, `activity_id` — and *not*
+   `skipped_reason`. So even with debug enabled, the emitted line could not tell
+   an applied decision from a skipped one. Its own comment calls it a "Metric
+   stub (18.3.6)"; the stub drops exactly the field that distinguishes the two
+   branches it spans.
+
+So the denominator is unavailable, but not because nobody instrumented the
+applied branch — because the one instrument that spans both branches is
+suppressed by level *and* blind to the distinction it exists to carry. That is a
+worse failure than absence: a reader who greps the source finds coverage and
+concludes the loop is observable.
 
 That makes the 4268 a numerator with no denominator. Nothing in the logs
 distinguishes 4268 skips out of 4300 decisions from 4268 out of 400000 — which
@@ -2823,7 +2850,13 @@ Here, a branch logs every refusal and says nothing about the ones it applied.
 rates are the unit in which learning behaviour is judged.**
 
 Dispatched as a goal (additive `else`, mirroring the skip line field-for-field on
-the five fields that make the two comparable).
+the five fields that make the two comparable). **The goal text carries the
+too-strong version of the claim** — it asserts no log line exists for the applied
+branch, which is false. The *edit* it specifies is unaffected: an `APPLIED` line
+at info, beside the `SKIPPED` line at info, carrying `tier_class` and
+`reach_verdict`, is the right fix whether or not a suppressed debug stub also
+exists. Raising `emitPosteriorUpdateMetric` to info would not substitute for it
+until that function stops dropping `skipped_reason`.
 
 ### The control that killed the more interesting hypothesis
 
