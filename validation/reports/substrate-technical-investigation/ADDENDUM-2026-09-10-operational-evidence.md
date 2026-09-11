@@ -3384,5 +3384,101 @@ is exactly what law 7 warns against: **activity counts and better dashboards are
 not gap closure.**
 
 
+---
+
+## AH. I shipped a regression to the drafter, and the gate will not let me fix the comment
+
+The first change this session aimed at the reach *mechanism* rather than at
+measuring it. It made things worse, and the way I verified it beforehand is the
+part worth keeping.
+
+### The defect was real
+
+`composeLessonsBlock()` builds the `KNOWN FAILURE MODES` block injected into the
+drafter's prompt. It recalls from concept-db keyed on the **failure class**, and
+when there is no failure class it omits the query entirely. Measured over 24h,
+**232 of 454 recalls (51%) logged `class=none`** — every first attempt. The file's
+own comment already names the consequence: *"Sending no query at all returned the
+SAME eight rows for 132 consecutive composes under the heading KNOWN FAILURE
+MODES — a fixed list read as targeted advice."* That was fixed for the has-class
+path and explicitly left alone for the no-class path, which is the majority path.
+
+### The fix was wrong
+
+`95d973e6` sent the spec text as the query instead. Measured against live
+concept-db after deploy:
+
+| query | lessons returned |
+|---|---|
+| unkeyed (prior behaviour) | **8** |
+| four realistic spec strings | **0, 0, 0, 1** |
+
+Production agreed immediately: every post-deploy `class=none` recall logged
+`n=1`, against `n=8` on 232 of 233 before.
+
+The cause is vocabulary. Corpus entries read *"compose failure class
+typecheck_dangling_reference: a symbol you USE must be DECLARED in the same
+plan…"*. A prose spec naming a file and an intended edit shares almost no terms
+with that. The search is correct; the query came from a different language than
+the corpus.
+
+And it is **strictly worse, not merely different**. At 0 results the code falls
+through to the JSONL fallback, which is acceptable. At 1 result the
+`found.length > 0` check passes, the fallback is **skipped**, and the drafter
+receives one incidental lesson where it previously had eight.
+
+**Reverted by `b865620b`**, dispatched as a goal and landed with no operator
+hands, deployed by mitosis cutover at 15:30:38. Verified in the container's live
+source rather than from the verdict: the spec-query form is gone (0 occurrences)
+and the original conditional is restored (1 occurrence).
+
+### ⚠ The verification error: I hashed the result instead of counting it
+
+Before dispatching I ran the right experiment and misread it. I compared query
+forms by **md5 of the output**:
+
+```
+unkeyed  #1: cff466d1…
+unkeyed  #2: cff466d1…   ← identical, so the unkeyed list is fixed
+spec-keyed : ad0963c3…   ← different, so concept-db discriminates on prose
+```
+
+The hash differed because one result was **populated and the other was empty**.
+A hash distinguishes; it does not evaluate. I had written *"never accept the
+favourable half of a confounded pair"* into this same report hours earlier, then
+treated *different* as *better* without looking at what was inside.
+
+Every other hypothesis this session was killed by a control before publication.
+This is the one I acted on first, and it reached production.
+
+### The gate will not let me repair the comment
+
+`95d973e6` left the comment above it asserting *"the query is omitted entirely,
+preserving today's behaviour exactly"* — false the moment it landed, and
+precisely the note that would invite a future reader to "restore" the defect. A
+comment-only correction was dispatched twice:
+
+1. **rolled back, flaky:** `verify failed … resolves git_status in the
+   development-vessel repo itself`. That test **passes** on clean HEAD, **passes**
+   with a dirty tree, and the string appears **zero times** in 2962 recorded
+   lessons. Noise.
+2. **rolled back, structural:** `semantic_gate: zero behaviour delta — added
+   lines are comment/whitespace-only`.
+
+**The compose lane categorically refuses comment-only changes.** The substrate
+cannot repair its own documentation through the lane it uses for everything else
+— and law 9 holds that a document is an expectation the system has about itself,
+so a comment contradicting its code is a defect, not cosmetics.
+
+Two attempts, two unrelated causes, and the flake came first and masked the
+structural one. Had only the first occurred I would have concluded "retry and
+move on" — which is exactly what I did.
+
+**The revert resolves it without a third dispatch**: restoring `{}` makes the
+original comment true again. That is luck, not design. The general case — a
+comment made false by a behavioural change that is *not* going to be reverted —
+has no route through this lane.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
