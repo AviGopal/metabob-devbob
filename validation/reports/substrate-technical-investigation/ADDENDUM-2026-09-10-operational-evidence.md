@@ -3909,5 +3909,69 @@ alarm in §AA applies here in the opposite direction — there an alarming aggre
 dissolved under partition, here a reassuring one does.
 
 
+---
+
+## AN. The pre-registered measurement: 12.8%, and my own headline figure was wrong
+
+**Measured over 16:45Z–21:02Z, 4h17m with zero operator dispatches** — the
+operator-quiet window §AE said was needed and could not be taken while I was
+dispatching. Standing by *was* the next step.
+
+All four of the day's fixes deployed before the window opened.
+
+| window | ALL labels | **NON-TRIVIAL only** |
+|---|---|---|
+| 09-09 all day | 10/99 = 10.1% | **8/97 = 8.2%** |
+| 09-10 all day | 18/188 = 9.6% | **16/186 = 8.6%** |
+| 09-11 00:00–12:00 (pre-fix) | 4/107 = 3.7% | **2/105 = 1.9%** |
+| 09-11 12:00–16:45 (operator active) | 36/109 = 33.0% | 20/85 = 23.5% |
+| **09-11 16:45+ (quiet, post-fix)** | 21/66 = 31.8% | **6/47 = 12.8%** |
+
+### The headline number was probe contamination
+
+The all-labels column shows 3.7% → 31.8%, which read as a nine-fold jump. Of the
+first twelve `achieved` goals in the quiet window, **seven were
+`Compute 419 * 733 and record the result in a memory note`** — the same arithmetic
+probe, repeated — plus a liveness probe asking for a registry count. Eight of
+twelve were synthetic triviality.
+
+Excluding probe goals, the quiet window is **12.8%**. The headline was inflated
+**2.5×** by traffic that exists to test the harness, not the capability. This is
+the §AM gaming, reappearing inside the population I had called the honest one.
+
+### And it corrects the figure this whole report has used
+
+I have reported **5.0% / 2.4%** throughout. The correct like-for-like baseline is
+**~8.4% on non-trivial goals** across 09-09 and 09-10. The 5.0% came from a
+single window, and the 2.4% edit-goal slice from a smaller one still.
+
+So the defensible reading of today is **repair, not improvement**:
+
+- the morning sat at **1.9%**, an outlier far below baseline — consistent with
+  the dev-vessel deadlock (§W) and the worktree bug (§AJ) both being live, the
+  latter failing *every isolated compose* of the vessel that does the composing;
+- the quiet window sits at **12.8%**, at or slightly above the ~8.4% baseline;
+- at n=47 with 6 achieved, 12.8% against 8.6% (16/186) is **not statistically
+  distinguishable**. The honest claim is that the lane was restored from a
+  degraded state, not that it was improved beyond where it started.
+
+### Against the expectation
+
+The session expectation was ~90% reach on arbitrary useful goals. The measured
+value is **12.8%**, on 47 labels, in the cleanest window available. Not 90%, and
+not close.
+
+What the measurement *does* establish is that the morning's 1.9% was pathological
+rather than baseline, and that two of the three defects removed today were
+plausibly responsible for the degradation. That is worth having. It is not
+progress toward 90%, and the gap to 90% remains a drafter-quality problem whose
+dominant input is model capacity.
+
+**P1 of the pre-registration predicted 2–15% and the all-labels figure came in at
+31.8% — outside the range.** Declared as a miss. The non-trivial figure lands
+inside it, but the prediction was made before the partition existed, so the
+range was right for the wrong reason.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
