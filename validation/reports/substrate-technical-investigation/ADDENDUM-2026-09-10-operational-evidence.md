@@ -2253,6 +2253,29 @@ valid API key is a precondition, not an optimisation** — it is the class of
 intractable blocker the operator role reserves for intervention, since no
 substrate-authored fix can mint its own credentials.
 
+### The blocker, confirmed at the provider and not through the vessel
+
+A vessel's own error log is not evidence about the vessel's providers. Each
+credential present in `/etc/substrate/env` was therefore probed directly against
+its provider's API. Three keys are configured; five other provider slots
+(`GOOGLE`, `GROQ`, `MISTRAL`, `OPENAI`, `RUNPOD`, `VLLM`) are empty, so there is
+no unused-but-valid key and **no routing gap to repair** — the three that are
+wired are exactly the three that fail.
+
+| provider | direct probe | result |
+|---|---|---|
+| anthropic | `POST /v1/messages` | `authentication_error: API key is invalid` |
+| openrouter | `GET /v1/credits` | `total_credits: 800`, `total_usage: 800.20` — **balance exhausted, overdrawn by $0.20** |
+| chutes | `GET /v1/models` → 200; `POST /v1/chat/completions` | key authenticates, then `Quota exceeded and account balance is $0.0` |
+
+The chutes pair is the informative one: **authentication succeeds and inference
+still refuses.** A key that passes a models listing proves nothing about credit,
+which is why the vessel's 402s were genuine and not a misrouted request.
+
+This makes the operator ask exact rather than a general appeal: replace the
+anthropic key, or add credit to openrouter (the shortfall is cents) or chutes.
+Any one of the three lifts the floor.
+
 The `pending-verdict` fabricated-verdict removal from §T is verified clean: zero
 occurrences remain anywhere in the goal-host checkout, goal-host restarted at
 09-11 05:03:45Z, and exactly one historical row exists — written at 21:07:46Z,
