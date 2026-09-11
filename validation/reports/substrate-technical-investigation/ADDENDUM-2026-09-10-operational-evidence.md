@@ -2377,5 +2377,100 @@ because an earlier, tighter version refused while `gemini-2.5-flash` answered on
 the first try. It is not refusing prematurely.
 
 
+---
+
+## W. A second outage, hidden under a green recovery counter
+
+**Status: measured live. Confidence HIGH on the defect, HYPOTHESIS on its cause.**
+
+This one has nothing to do with credentials, and it was found only because two
+operator writes to the gap store died in the same session.
+
+### development-vessel is unreachable roughly a third of the time
+
+Polling `/health` every five seconds, using the same ten-second budget the
+watchdog uses:
+
+```
+12:02:51   200   0.00085s
+12:03:06   000   10.0s  (timeout)
+12:03:21   000   10.0s  (timeout)
+12:03:36   000   10.0s  (timeout)
+12:03:45   200   4.75s  (restarted)
+```
+
+**Sub-millisecond to totally unresponsive in under fifteen seconds.** That is
+not gradual degradation and not memory pressure; it is a blocking call seizing
+the event loop.
+
+`self-recovery-tick` then declares `UNHEALTHY: development-vessel (:8090) —
+restarting` on essentially every tick — 11:51:45, 11:54:45, 11:57:45, 12:00:45,
+12:03:45, exactly every three minutes. Effective availability is about **65%**:
+healthy for two minutes, hard-stalled for one, restarted, repeat.
+
+The vessel's own log corroborates this independently. Across the silent window
+11:58:23 → 12:00:45 it logged nothing at all, and the **30-second `gc-tick`
+timer fired zero times** where it should have fired four or five. A timer that
+does not fire is direct evidence of a blocked loop, and it rules out journald
+buffering — buffering would flush the whole backlog at once, and only a single
+gc line appeared.
+
+### The recovery counter is green on every tick
+
+Each of those ticks reports `recovered_by_restart: 1`, because the vessel really
+is healthy immediately after a restart. So the watchdog's success metric reads
+perfect while the underlying defect is permanent and unaddressed.
+
+**A recovery counter that increments forever is not a recovery, it is a mask.**
+Restarting a vessel whose defect recurs within two minutes converts a hard
+failure into a permanent flap and reports each cycle as a win. The watchdog
+already has an `ESCALATE` path — it uses it for `federation-transport-vessel` on
+every tick — so the only missing piece is a predicate noticing that the *same*
+vessel has been "recovered" on K consecutive ticks.
+
+### Suspected mutual deadlock — stated as a hypothesis
+
+The last thing development-vessel emits before going silent, flushed only when
+SIGTERM arrives, is `[substrate-gap] gap-compose failed to start (systemctl exit
+unknown)`, twice. The vessel shells out to `systemctl` from inside its own
+process to start `gap-compose.service`.
+
+Meanwhile `gap-compose.service` ran for **7m35s** and exited at the exact moment
+development-vessel was stopped. Its single log line — timestamped 11:53:16, not
+flushed until 12:00:45 — reports `flow: gap-compose, action: watchdog_restart,
+open_intents: 748, stalled_min: 175, restart_impulse: gap_to_feature,
+attempts: 3, ok: false, error: "The socket connection was closed unexpectedly"`.
+
+So gap-compose was blocked on an HTTP call to development-vessel while
+development-vessel was blocked on a systemctl call to gap-compose, and only the
+watchdog's SIGTERM broke the tie. **This is not yet confirmed** — establishing
+it requires showing the systemctl invocation is awaited rather than detached,
+and that check should precede any repair.
+
+### Observed damage
+
+Not inferred: **two operator `substrateGap` writes were lost** inside stall
+windows during this session — one to a read timeout, one to `RemoteDisconnected`
+— and a check afterwards confirmed neither had landed. development-vessel serves
+`memoryNote` and `substrateGap`, so the losers are the gap store and the
+system's own memory. The `gap_to_feature` flow reporting **748 open intents
+stalled 175 minutes** is consistent with a lane that cannot progress because its
+executor keeps being killed.
+
+Two repairs follow, both needed: never block the event loop on a child process,
+and give self-recovery a repeat-recovery predicate so a vessel restarted on K
+consecutive ticks escalates instead of reporting success. Filed rather than
+hand-patched.
+
+### A note on how this was found
+
+Nothing surfaced this. It was noticed because a gap write timed out, and the
+obvious reading — "the resolver is slow" — was wrong. `systemctl is-active`
+said `active`, `/health` answered 200 on demand, and `NRestarts=0` because
+systemd was not restarting it; an external watchdog was. Every instrument
+pointed at a healthy vessel. Only `ActiveEnterTimestamp` moving between two
+consecutive checks gave it away.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
