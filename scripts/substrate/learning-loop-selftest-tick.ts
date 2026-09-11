@@ -142,8 +142,24 @@ export function evaluate(e: Evidence): Assertion[] {
         // (gradedCount > 0) and the arm still did not move, a structural skip is the
         // likely cause and the honest reading is UNTESTED, not severed. Only when the
         // verdict never arrived either is severance the right accusation.
+        //
+        // THE SKIP IS DOUBLE-DETERMINED, AND A STOCHASTIC ARM ALONE DOES NOT LIFT IT
+        // (2026-09-11). `skipVariantUpdate` is a disjunction:
+        //   tierClass === 'all_deterministic' || trace.metadata.information_yield === 'idle'
+        // and BOTH hold for this probe — the journal reports tier_class
+        // "all_deterministic", and every probe execution row carries
+        // information_yield "idle". Satisfying one branch leaves the other skipping,
+        // so the earlier prescription ("needs a STOCHASTIC probe arm") was necessary
+        // and not sufficient.
+        //
+        // Note also that tier comes from the TRACE, not the template: the template's
+        // lone task names resolver `gate_self_probe`, which is absent from
+        // DETERMINISTIC_RESOLVERS and would classify as 'pattern' (stochastic).
+        // posterior-update.ts maps each task's pre-classified `resolver_tier` to a
+        // synthetic resolver name before classifying, so reading the template alone
+        // predicts the wrong tier. Read the journal's `tier_class`, not the template.
         : e.gradedCount > 0
-          ? "probe arm posterior did not move, but its verdict WAS delivered — consistent with the all_deterministic skip in posterior-update.ts, which declines to write a belief for an arm with no stochastic choice. This link is UNTESTED by this probe, not severed; grading it needs a STOCHASTIC probe arm."
+          ? "probe arm posterior did not move, but its verdict WAS delivered — consistent with the structural skip in posterior-update.ts, which declines to write a belief when the arm has no stochastic choice OR the trace's information_yield is 'idle'. Both hold for this probe, so the skip is double-determined. This link is UNTESTED by this probe, not severed; grading it needs an arm that is BOTH stochastic-tier AND non-idle — satisfying either one alone still skips."
           : "probe arm posterior did NOT move and no verdict was delivered either: the belief junction is severed",
   });
 
