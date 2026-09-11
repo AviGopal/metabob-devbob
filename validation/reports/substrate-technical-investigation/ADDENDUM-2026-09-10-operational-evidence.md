@@ -3552,5 +3552,95 @@ that adding entries to `COMPOSE_LESSON_GUIDANCE` does not close it: that grows
 the generalities and leaves the specificity discarded.
 
 
+---
+
+## AJ. Every isolated compose of development-vessel failed on a `.git` that is a file
+
+**Landed `29756da`, deployed, behaviourally confirmed with a control.** The first
+change this session that removed a blocker rather than measuring one — and it was
+found only by refusing to let my own "flake" verdict stand.
+
+### The bug
+
+`git-status.ts` reads `${repoPath}/.git/HEAD` as a filesystem path. That holds for
+an ordinary checkout. In a **linked git worktree** `.git` is a *file* whose whole
+contents are `gitdir: /absolute/path/to/the/real/git/dir`, so
+`${repoPath}/.git/HEAD` does not exist. The existing catch then returns
+`{ shape: "gitStatus", body: { error, repoPath } }` — a body with **no
+`commitHash`**.
+
+Verified against a real worktree in the repo:
+
+```
+.git contents: gitdir: …/.git/modules/repos/development-vessel/worktrees/agent-a23929b53bdc18aea
+does <worktree>/.git/HEAD exist?   NO
+does <real gitdir>/HEAD exist?     YES
+```
+
+The vessel's own integration test asserts
+`expect(b.commitHash).toMatch(/^[0-9a-f]{40}$/)` and therefore fails with
+`Received value must be a string: undefined`. **Isolated composes stage into a
+fresh worktree and run the suite there**, so this fired for every isolated compose
+of this vessel: change rolled back, reason naming a test rather than a cause.
+
+### ⚠ I diagnosed it as a flake, and every check I ran confirmed the wrong answer
+
+On first sighting I concluded flake, on three pieces of evidence:
+
+1. the test **passes on clean HEAD**;
+2. it **passes with a dirty tree**;
+3. the strings `resolves git_status` and `must be a string: undefined` appear
+   **zero times in 2962 recorded lessons**.
+
+All three are true. All three are **consistent with the bug**, because every check
+I ran was in an *ordinary checkout* — the one condition under which the code
+works. I tested the environment the failure cannot occur in and concluded the
+failure was not real.
+
+Point 3 is worse than useless and I read it backwards: an isolated-compose verify
+failure rolls back *before* a lesson is written, so the corpus **cannot** contain
+these. Absence there was never evidence of rarity; it was a consequence of the
+failure mode. It took a second occurrence, on an unrelated change, to make me read
+the test body instead of its name.
+
+### The fix and its confirmation
+
+Read `.git` as text first; if it starts with `gitdir:`, use the remainder as the
+git directory. If reading as text throws — which is what an ordinary `.git`
+directory does — keep the existing path, so that case is byte-identical to before.
+
+Confirmed against the deployed vessel, with a control:
+
+| target | result |
+|---|---|
+| linked worktree | `commitHash: 29756da8…`, `ref: null` ✓ |
+| ordinary checkout (control) | `commitHash: 29756da8…`, `ref: refs/heads/dev` ✓ |
+
+### A fourth verdict that contradicted the tree
+
+The dispatch reported `UNFAVORABLE … rolled_back: verify failed … TS1005: 'try'
+expected`. The change is **committed as `29756da`, byte-for-byte as specified,
+working tree clean.** A failed attempt's reason was reported over a subsequent
+successful one. Had I trusted the verdict I would have redispatched a change that
+was already in. **Read the diff, not the reason** — four independent sightings
+today.
+
+### Three blockers, three messages naming the wrong cause
+
+Worth stating as a class, because it is the through-line of this session:
+
+| blocker | what the message said | actual cause |
+|---|---|---|
+| dev-vessel deadlock (§W) | `gap-compose failed to start` | a synchronous spawn that called back into the spawner |
+| this one | a failing test's name | `.git` is a file in a worktree |
+| compose refusal (§AA) | `the spec names region ""` | the compose vessel was draining |
+
+In each case the true cause was one layer beneath the message, and in each case I
+believed the message first — here for two full dispatches. A message that
+confidently names a cause suppresses the instinct to look past it, which is
+precisely why the one-string-two-states class is filed as a gap rather than three
+anecdotes.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
