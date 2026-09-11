@@ -3754,5 +3754,90 @@ on 2026-09-10, refused a change whose purpose was adding logging — which is wh
 makes it a class rather than an incident.
 
 
+---
+
+## AL. Two writers, one distils, the persisted one does not
+
+Landed `107a75c7`. Also **corrects §AJ's correction** — which overstated in the
+other direction.
+
+### What §AJ got wrong, twice
+
+§AJ first claimed verify failures are not recorded at all. Corrected: 401
+`verify_failed` rows exist. That correction then claimed the corpus "contains 401
+records of verification failure and cannot tell you what failed." **Also too
+strong.** Measured over the wider verification-failure family
+(`verify_failed` + `syntax_break` + `typecheck_dangling_reference`):
+
+| | |
+|---|---|
+| verification-failure rows | **1001** |
+| ...carrying an `error TS…` line | **417 (42%)** |
+| ...carrying none | **584 (58%)** |
+
+So the reason field is informative more often than not-informative — just not
+reliably. The true statement is that **58% of verification-failure records cannot
+say what failed**, not all of them.
+
+### Why it is intermittent: two writers
+
+`appendComposeLesson` has two paths that look like the same thing and are not:
+
+```js
+// :3080  in-memory — DISTILS
+const diagLines = reason.split("\n").filter((l) => /error TS\d+|\berror\b|FAIL|Error:/i.test(l));
+const diag = diagLines.length > 0 ? diagLines.join("\n") : reason;
+lessons.push({ …, reason: diag.slice(0, 200), raw_excerpt: diag.slice(0, 1500) });
+
+// :3177  the JSONL — DOES NOT
+appendFileSync(COMPOSE_LESSONS_PATH, JSON.stringify({ …, reason: reason.slice(0, 200), … }));
+```
+
+The file everything reads is written by the path with no distillation. The
+give-away was a field: **`raw_excerpt` appears on 0 of 2993 rows**, though line
+3080 writes it on every push. The distilled record goes somewhere that is not this
+file.
+
+So when the raw output happens to begin with an error line, the 200-character
+slice is useful; when it begins with the dependency-install preamble, it is not.
+That is the 42/58 split, and it is luck rather than design.
+
+### The fix, and why it is not redundant
+
+`107a75c7` distils at the **call site**, before `lessonReason` is handed to
+`appendComposeLesson`:
+
+```js
+?? (failedVerify ? (failedVerify.output.split("\n").filter((l) => /error TS\d|error:|\(fail\)|expect\(/.test(l)).slice(0, 6).join(" | ") || failedVerify.output) : undefined)
+```
+
+Because it runs upstream of both writers, the JSONL path receives already-distilled
+text. Falls back to the full output when nothing matches, so the worst case is
+today's behaviour. Landed, clean tree, typechecks; `const lessonReason = String(`
+still appears exactly once.
+
+**Behavioural confirmation is still owed** — it needs the next natural verification
+failure, and I am not going to manufacture one.
+
+### The failure of the first attempt demonstrated the defect it was fixing
+
+A 17-line version of this change was split into two ops and broke with
+`TS1109: Expression expected`. The dispatch verdict named the file, line, column
+and cause. The corpus recorded, for that same event:
+
+```
+syntax_break | == install == == resolve == DRYRUN_EXIT=0 @types/bun@1.3.14 … $ tsc --noEmit src/resolver
+```
+
+Cut off mid-word, before a single error line. **The substrate diagnosed its own
+failure precisely and wrote down the install preamble** — while I was editing the
+code that decides what it writes down.
+
+It also explains this morning's misdiagnosis in §AJ: I searched 2962 lessons for a
+failing test name, found zero, and read it as rarity. The failure was recorded
+hundreds of times in a form that could not contain the name. **My evidence was an
+artifact of the bug I had not found yet.**
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
