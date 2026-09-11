@@ -3079,5 +3079,158 @@ made one rate observable, and the first thing the rate says is a question worth
 asking properly.
 
 
+---
+
+## AD. The reserved compose slot was never claimed, because I never said who I was
+
+**The most operationally consequential thing found this session, and most of it
+is my error.**
+
+Every dispatch in this investigation was sent as:
+
+```json
+{"goal": "...", "tags": ["operator:claude", "gap:..."]}
+```
+
+`operator:<id>` is **a derived tag**. `index.ts:15240` generates it *from* a
+top-level `operator` field. Supplying the derivative does not set the source.
+
+The consequence runs through five hops in `goal-host-vessel/src/index.ts`:
+
+```
+body.operator            (:14695)  — absent
+  → if (operator) return "operator"  (:14871, FIRST in the trigger precedence)
+  → …falls through every branch to the attributability floor: return "run-goal"
+  → operatorOrigin: trigger === "operator"   (:15295)  — false
+  → directed: opts.operatorOrigin === true   (:11805, :12365) — false
+  → effectiveCapFor(directed): directed ? cap : max(1, cap - 1)   [cap = 2]
+```
+
+So every dispatch I made ran in the **autonomous lane at concurrency 1**,
+competing with boredom and gap-closing, instead of the **directed lane at
+concurrency 2**. The top slot is reserved structurally — autonomous work scans
+only `[0, cap-2]` — and I never qualified for it.
+
+This is what the `CAPACITY (BUSY)` refusals were. At the moment of one refusal,
+`ls` on the slot directory showed:
+
+```
+slot-0.slot: {"pid":2281542,"at":1789135845116,"composeId":"2281542-mtx1adbw-z88fmo"}
+```
+
+One live autonomous holder, cap 1, refused. With `directed: true` the same
+dispatch would have taken slot-1.
+
+**Confirmed by intervention**, one thing changed: the identical payload plus
+`"operator": "claude"` returned `trigger: operator`, ran instead of refusing, and
+landed `80e45a2a`. Two attempts immediately prior, without the field, returned
+`CAPACITY (BUSY)` and `draining`.
+
+Two things follow that are worth more than the fix:
+
+**The three dispatches that landed earlier today landed *despite* running
+deprioritized.** §Z tried to explain a 3/3 landing rate against a 2.4% fleet rate
+and reached for goal-text quality. Whatever the explanation is, it now has to
+account for those three having been in the *wrong lane*.
+
+**The reservation built on 2026-08-11 has been inert ever since.** Its own
+comment records why it was built: *"an operator goal was refused `BUSY` after its
+retry while both slots were held by that lane."* The structural fix worked. The
+caller never claimed it.
+
+### The half that is not mine
+
+A dispatch carrying `operator:claude` **in its tags** is silently classified
+autonomous. The trigger computation already inspects tags with a `pref()` helper
+for six other prefixes — `escalated_from:`, `resumed_from:`, `note:`,
+`dispatcher_reason:` — and does not inspect `operator:`. The information was
+present, in the expected form, and unread.
+
+That is this report's own recurring class: *a renamed field across a boundary
+returns empty, never errors.* The floor comment defends the default correctly —
+*"a caller that forgets cannot silently claim priority"* — and that reasoning is
+sound for an unknown dispatcher. It is not sound for a tag that the system itself
+emits in exactly that spelling one file away.
+
+
+---
+
+## AE. What the loop actually learns: 19 of 21 belief updates are penalties
+
+**Pre-registered before observing** (the predictions and an amendment are in the
+session record). The intervention: no operator dispatches for the window;
+everything else unchanged.
+
+| | 14-min window (§AC) | **20-min operator-quiet window** |
+|---|---|---|
+| APPLIED | 14 | **19** |
+| SKIPPED | 172 | 201 |
+| applied share | 7.5% | **8.6%** of 220 |
+| distinct activities credited | 5 | 6 |
+| `feature_compose` share | 10/17 = 59% | **12/19 = 63%** |
+
+- **P1 (share stays 4–12%): held**, 8.6%.
+- **P3 (fewer than 10 activities): held**, 6.
+- **P2 (`feature_compose` drops below 59%): FAILED.** It rose to 63%.
+
+### The amendment mattered, and it acquits the result
+
+The amendment required checking gap lineage before reading P2 either way, because
+zero operator dispatches is not zero operator-*caused* traffic. Five gaps drove
+composes in the window:
+
+```
+compose-lessons-are-loaded-but-never-credited-…-narrowed
+performance-inefficiency-execution
+self-op-health
+recommit-compose-lessons-are-loaded-but-never-credited-…-anchor
+recommit-a-wired-provider-with-no-key-is-silent-capacity-loss-…   ← mine
+```
+
+**One of five is operator-caused.** The contamination is real but partial, and
+the concentration survives it: four of the five driving gaps are the substrate's
+own. **P2's failure to drop is a finding, not an artifact.**
+
+### But "credited" was the wrong word, and that is the actual result
+
+The new log line carries the deltas, so the *direction* is now visible for the
+first time. Every applied update in the window:
+
+| activity | α delta | β delta | count |
+|---|---|---|---|
+| `feature_compose` | 0 | 1 | **14** |
+| `universal-tool-fallback` | **0.727** | 0.273 | 2 |
+| `universal-tool-fallback` | 0 | 1 | 1 |
+| `satisfier:shellResult` | 0 | 1 | 1 |
+| `satisfier:llm_completion_dispatch` | 0 | 1 | 1 |
+| `proposed_pattern_authored_obsidian_assist_active_note` | 0 | 1 | 1 |
+| `proposed_pattern_authored_http_response_backfill_v2` | 0 | 1 | 1 |
+
+**19 of 21 applied updates are pure β penalties.** The only positive movement in
+the entire twenty minutes is `universal-tool-fallback`, twice, at the graded-yield
+split the code documents as the κ⁻¹ metric-spread lever. `feature_compose` is
+**14 for 14 penalties and zero credit**; a sample of its execution rows in the
+window is uniformly `reached:false`.
+
+So §AC's phrasing — that belief updates are "concentrated in the self-development
+machinery" — is true and was the wrong thing to notice. The concentration is a
+concentration of **punishment**. When this loop moves a belief at all, it moves it
+down about nine times out of ten, and the thing it is most consistently learning
+is that its own composer does not reach.
+
+This is consistent with, and now mechanically explains, two standing observations:
+reach flat at ~4.5% with α +5.91 against β +364 over 48h (§T), and the 2.4%
+edit-goal rate. Those were aggregates over days inferred from stored posteriors.
+This is the same picture read directly off the decision point, per decision, in
+twenty minutes — which is what the one-line change bought.
+
+**Limits, stated plainly.** n=21 over twenty minutes on one deployment, with the
+completion plane credential-starved, which is itself a reason composes fail. This
+does not show the learning machinery is broken — the opposite: grading fires,
+deltas compute, the tier gate admits only stochastic arms, and the graded-yield
+formula appears exactly where it should. It shows the machinery is working
+correctly on an input stream that is almost entirely failure.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
