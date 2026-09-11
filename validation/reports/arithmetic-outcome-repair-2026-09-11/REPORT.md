@@ -138,6 +138,48 @@ same class from three days earlier — a recurring class), which is a
 substrate-detected failure with a substrate-generated gap: deliverable 5's
 entry, to be watched and coaxed rather than hand-completed.
 
+## Second arc: the multistep ladder rung, two more substrate-landed repairs
+
+Goal: `Compute 419 * 733 and record the result in a memory note titled
+"product-419-733"` — a useful two-step composition (shell compute →
+memoryNote_write) whose artifact the verifier can independently resolve.
+
+**Defect 1 — rebind adapted only one operand.** The tier-2 rebind adapted the
+learned 137×149 command to `console.log(419 * 149)`: the absent-slot check
+compared the *punctuated* goal token `"149."` against a command containing
+`149)`, concluded the command didn't encode that dimension, and skipped the
+slot. Verification contained it at every layer (walk hollow, floor
+`wrong-compute-answer`, cache eviction + tombstone — the failure demonstrably
+changed downstream selection state), but the walk re-derived the same wrong
+adaptation from the donor on every retry, so the goal could never reach.
+Filed with root cause; substrate landed the fix (`cd011e3`: strip punctuation
+per token before the containment check). Post-fix the walk fresh-synthesized
+the correct command and wrote the correct note.
+
+**Defect 2 — the judge false-rejected the correct multistep execution.** With
+everything correct (stdout 307127, note body 307127), the LLM judge re-derived
+419×733 as "307787" and rejected; a retry confabulated "failed to write" on a
+successful write. This is the original disease resurfacing exactly where the
+standalone-green guard hands off. Substrate landed a compute-artifact oracle
+(`d8b1d92`): recompute in-process, resolve the titled note via
+`verifyNamedArtifactCarries`, green on exact carry / red on mismatch / fail-open
+when unresolvable. Recovery verified live: dispatch bee01ffa reached via
+`deterministic:verified-compute-artifact` with α +2 to the memoryNote_write
+pathway.
+
+**Defect 3 — reach erased the requested artifact.** Reading the receiver after
+the green: 3 s post-reach, the answer-delivery pipeline overwrote the note body
+with the rendered markdown answerBody — the clean `307127` the goal asked to
+record survives only buried in the embedded digest. Filed as
+`post-reach-answer-mirror-clobbers-the-goal-named-artifact` (deliverable 1's
+"reaching a shape must not erase what the user asked for", observed live).
+Dispatch labeled `partial` in the oracle corpus.
+
+This arc is one full detect→diagnose→repair-through-substrate→activate→
+independently-verify cycle repeated twice back-to-back on related defects —
+though both diagnoses were operator-authored, which is the distance remaining
+to deliverable 5's system-generated repair goals.
+
 ## Evidence
 
 - Landed repair: goal-host-vessel `0c7f10e` (substrate-authored, route-edit-5d0bbb70)
