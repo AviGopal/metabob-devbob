@@ -2460,6 +2460,49 @@ watchdog's SIGTERM broke the tie. **This is not yet confirmed** — establishing
 it requires showing the systemctl invocation is awaited rather than detached,
 and that check should precede any repair.
 
+### The deadlock is confirmed, and the repair is one line
+
+`repos/development-vessel/src/resolvers/substrate-gap.ts:1046`:
+
+```js
+const proc = unitAlreadyBusy
+  ? null
+  : Bun.spawnSync(["systemctl", "start", "gap-compose.service"], { stdout: "pipe", stderr: "pipe" });
+```
+
+`Bun.spawnSync` is **synchronous** and sits on a resolver's request path, so it
+blocks the vessel's entire event loop. `systemctl start` waits for the systemd
+job to complete unless `--no-block` is passed. `gap-compose.service` runs
+`watchdog-tick.ts`, which makes HTTP calls **back to development-vessel**.
+
+So the vessel blocks itself waiting for a child that is waiting for the vessel,
+and only the watchdog's SIGTERM breaks the cycle — exactly the observed
+timeline, with both processes released at the same instant. **A synchronous
+spawn of a process that calls back into the spawning process is a guaranteed
+deadlock, not a race.**
+
+A second defect sits at the same site, found while confirming the first: lines
+1047–1057 and 1058–1069 are an **exact duplicate** of each other, the same
+`if (proc?.exitCode !== 0) … else …` block copy-pasted. That is why every stall
+logs its failure twice, and it is what initially made one event look like two.
+
+The repair, in order of preference: pass `--no-block` — most precise, because
+the call site only wants to *trigger* a pickup and never uses the result except
+to log it — or switch to the async `Bun.spawn`. Either alone breaks the
+deadlock; the duplicated block should go too.
+
+**Do not mistake the existing guard for a fix.** `unitAlreadyBusy`
+(`__composeDrainInflight`) suppresses the spawn while a compose is in flight,
+and the comment above it records a previous incident where this same spawn sat
+*above* the guard and produced 27 concurrent typecheck processes at load 50.8 on
+14 CPUs. The guard bounds how *often* the spawn happens. It does nothing about
+the fact that when it does happen, it is synchronous.
+
+This was not landed in-session: `repos/development-vessel/src/**` is hook-gated
+through `feature_compose`, which needs an LLM completion, and the completion
+plane is credential-dead. The fix is recorded on the gap with a verbatim anchor
+so the compose lane can land it the moment completions return.
+
 ### Observed damage
 
 Not inferred: **two operator `substrateGap` writes were lost** inside stall
