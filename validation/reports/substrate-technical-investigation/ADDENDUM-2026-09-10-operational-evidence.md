@@ -2679,5 +2679,74 @@ logging. Worth recording as the shape that gets an observability fix through
 that gate: **restructure the branch you are instrumenting, rather than appending
 a bare log line to it.**
 
+---
+
+## Z. The credential plane is not the only binding constraint on reach
+
+**Status: measured, small-n, confounds named. Confidence MODERATE.**
+
+Every section above treats the ~90% reach contract as gated on credentials. The
+three dispatches in §X and §Y are themselves reach data, and they do not fit
+that story.
+
+Window 12:35–13:09 on 2026-09-11 — 34 minutes, one lane, one provider plane:
+
+| population | achieved | labelled | rate |
+|---|---|---|---|
+| operator-authored dispatches | 3 | 3 | **100%** |
+| autonomous edit goals | 1 | 4 | 25% |
+| **all edit goals in window** | **4** | **7** | **57%** |
+
+Against a baseline of **2.4%** (3/125) measured over the preceding 14.7 hours.
+
+The operator-authored goals shared four properties, none of which require a
+better model: **one concern and one file**; a **verbatim multi-line anchor**
+taken from the container's *runtime* checkout rather than the local one; the
+**measured evidence** for why the change was needed, inline; and an explicit
+statement of what *not* to touch. Two of the five attempts died on
+`RETRYABLE CAPACITY` and were simply **retried**, which the verdict itself
+instructs — after which they landed.
+
+This is law 8 stated as a measurement: *confabulation and fixation are
+downstream of information starvation, not model weakness*. On the same starved
+plane that was yielding 2.4%, goals carrying the load-bearing facts at the
+moment of use landed 3 for 3.
+
+### Confounds, named because they are serious
+
+- **n is tiny.** Three operator goals and four autonomous ones. This is a
+  direction, not a rate.
+- **Selection.** These were changes I had already root-caused to a specific
+  line. Autonomous goals are gap-derived and frequently multi-op — precisely the
+  shape §"REFUSAL IS NON-BINDING" shows landing partial subsets.
+- **Retry asymmetry.** I retried on transient capacity; autonomous dispatches
+  appear not to. §T measured 12 of 50 edit goals dying on capacity outright, so
+  an unknown part of this gap is retry policy rather than goal quality.
+- **A repair landed mid-window.** `61a6e46` deployed at 12:45 restored
+  gap-compose triggering (`failed to start` → `pickup triggered`), so the
+  autonomous population is not homogeneous across the window either.
+
+No single-cycle number should be trusted here — a lesson this session already
+learned by publishing "~65% availability" off one cycle and retracting it.
+
+### What it implies for the contract
+
+The defensible claim is narrow and still useful: **restoring credentials is
+necessary but not sufficient, and it is not the only lever.** Two cheap,
+substrate-side changes are implied and neither needs a key:
+
+1. **Retry transient capacity automatically.** The lane already classifies
+   `verdict=BUSY` correctly as transient and says "retry when the lane is free."
+   Nothing acts on that instruction. A goal that dies on a condition its own
+   verdict calls transient is a loss the system chose.
+2. **Carry anchors and evidence into gap-derived goals.** The gap store already
+   holds `edit_site`, verbatim anchors and classification metadata for filed
+   gaps — the same material that made these three dispatches land. Whether that
+   reaches the drafter at prompt-build is the question §"the teaching channel"
+   raises, and it is answerable without credentials.
+
+Both are gaps to file rather than fixes to absorb, and both are measurable the
+moment the plane is healthy enough to run a matched comparison.
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
