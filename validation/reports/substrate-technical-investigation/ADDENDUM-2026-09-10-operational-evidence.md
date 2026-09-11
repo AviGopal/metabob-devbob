@@ -2903,5 +2903,93 @@ discovery lookup and the vessel's own registration disagree; the cockpit reports
 this as the vessel being absent.
 
 
+---
+
+## AB. An escalation that only logs is not an escalation
+
+**Measured 2026-09-11.** Found while diagnosing why a dispatch refused for
+capacity — which turns out to be the same story.
+
+`self-recovery-tick` has emitted
+
+```
+ESCALATE: federation-transport-vessel still unhealthy after restart+revert
+```
+
+**1071 times**, every ~3 minutes, continuously from **2026-09-07 04:46:07** to
+**2026-09-11 14:06:27** — four days and nine hours. The unit's own journal over
+its full retained history:
+
+| | count |
+|---|---|
+| `Started federation-transport-vessel` | **19,348** |
+| `[fed-transport] bootstrap fetch failed: The operation timed out.` | 18,784 |
+| `[fed-transport] ERROR: set RELAY_MULTIADDR or point BOOTSTRAP_URL/HUB_DISCOVERY_URL at a discovery serving /bootstrap` | 18,784 |
+
+**Exactly two distinct failure messages, both invariant across all 19,348
+starts.** The vessel diagnoses itself correctly and completely on every single
+one, naming the precise environment variables required. And in
+`/etc/substrate/env`:
+
+```
+HUB_DISCOVERY_URL=""
+RELAY_MULTIADDR=""
+```
+
+Both present, both empty. This is a deployment with no hub. Federation transport
+cannot start here, and **no number of restarts can set an environment
+variable.**
+
+### Why this is the twin of §W, not a new class
+
+§W recorded a watchdog reporting `recovered_by_restart:1` on every tick — a
+green counter that incremented forever and masked a permanent fault. This is the
+same structure with the sign flipped: a **red** counter, `escalated:1` on every
+tick, correctly identifying that restart did not work — and then doing nothing
+with that conclusion except writing it down again three minutes later. The
+watchdog *has* an ESCALATE path; ESCALATE terminates in a log line.
+
+**The predicate missing in both cases is the same one**, and §W already named it
+for the green side: a consecutive-outcome test. On the red side it reads —
+
+> If a unit's failure output is byte-identical across K consecutive
+> restart+revert cycles, restarting is not a remedy. Stop restarting it, and
+> file a gap carrying the unit's own error line verbatim.
+
+That gap would have been filed on 2026-09-07 with a one-line, actionable,
+self-diagnosed remedy in it. Instead the information was regenerated 18,784
+times and read zero times.
+
+### The cost is not only noise
+
+At the ~1.4s CPU each start reports consuming, 19,348 starts is on the order of
+**7.5 CPU-hours** spent re-deriving a constant. More immediately: a restart every
+three minutes, forever, is a permanent contribution to the load average.
+
+That closes a loop on this session's own work. The dispatch that led me here was
+refused with `CAPACITY (BUSY)`, and the retry was gated behind waiting for
+loadavg to fall below 9 — on a host sitting at 11.66 with a futile restart cycle
+running against it. **The measurement instrument and the thing being measured are
+connected**: unrecoverable-unit thrash is one of the inputs to the capacity
+refusals that cost this session two dispatch attempts.
+
+### Operator decision, not a substrate fix
+
+Two remedies, and they are not the same:
+
+1. **Substrate-side, in class**: the consecutive-escalation predicate above.
+   This is the general fix and the one law 6 asks for — it detects the class
+   without an operator.
+2. **This instance**: either configure federation (`HUB_DISCOVERY_URL` /
+   `RELAY_MULTIADDR`) or mask the unit for this deployment via
+   `DISABLED_VESSELS`, which CLAUDE.md documents for exactly this case — a
+   deployment whose role does not include a unit.
+
+(2) is a configuration change to a running fleet and is left to the operator.
+Recommendation: mask it. This deployment is not federated, the vessel has been
+telling us so 18,784 times, and masking stops the thrash immediately whereas the
+predicate in (1) only stops *future* instances of the class.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
