@@ -213,6 +213,37 @@ the way the first repair does (`6586f01`); the rebind gate especially can
 regress silently — its refusal tally makes behavior observable but nothing
 asserts it.
 
+## Deliverable 5 audited, deliverable 6 constructed
+
+**The self-repair audit** (measuring what exists, not constructing a demo):
+autonomous landing `route-edit-fd4c7ab0` → development-vessel `107a75c765`
+(verify-output distillation) was traced end to end. The draft→typecheck→land→
+activate legs ran with zero operator hands, including genuine
+retry-after-failure (two earlier attempts rolled back on TS syntax errors).
+The repair is *effective* — post-land `verify_failed` lessons now carry the
+actual compiler error instead of the install preamble, confirmed at the
+receiving corpus. But the system never verified this itself: the post-land
+suite logged `ran=false pass=0 fail=0` on every cutover observed, and the
+repair-goal's authorship could not be attributed (dispatch records rotated).
+Filed as `autonomous-landings-are-never-post-verified` (high): the missing leg
+is exactly the difference between substrate-landed and substrate-verified
+repair, and its closure is deliverable 5's remaining work.
+
+**The qualification envelope** ([docs/QUALIFICATION.md](../../../docs/QUALIFICATION.md),
+timeless per law 9) was wired through the shaped cadence path per law 5 — a
+`timeShapedRhythm` (family `qualification`, parameters mirrored from the
+existing validation family, not invented) plus a `rhythmFamilyGoal` mapping,
+seeded via `poolImpulse_write`. The reading of the /goal directive's "run
+those continuously" as authorization for this cadence addition is stated here
+deliberately (the standing latitude memory lists cadence as ask-first).
+**First cycle verified at the consuming layer**: the next conductor tick read
+the rhythm, drained the probe as a dispatch tagged
+`operator:rhythm-conductor-drain`, and the probe reached with
+`deterministic:verified-compute-artifact` (653×379 → 247487, note carries it,
+α credited, composite recorded). N=1 verified autonomous cycle; the metric
+stream (correctness rate, verified repair latency, recurrence, intervention
+count) accrues from here and cannot be claimed from a single turn.
+
 ## Evidence
 
 - Landed repair: goal-host-vessel `0c7f10e` (substrate-authored, route-edit-5d0bbb70)
