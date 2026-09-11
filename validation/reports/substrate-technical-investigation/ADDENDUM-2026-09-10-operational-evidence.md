@@ -2309,5 +2309,73 @@ it. The gap's falsifier must therefore be **time-bounded** ("no such row created
 after the deploy timestamp"); as originally filed, that one historical row makes
 the predicate unsatisfiable and the gap immortal.
 
+---
+
+## V. What unblocking actually requires
+
+**Status: code- and journal-confirmed. Confidence HIGH.**
+
+Section U establishes that no substrate-authored fix reaches the credential
+floor. This section answers the question that follows: **what happens the moment
+an operator acts, and what is the cheapest action available?**
+
+### Two funded providers are already wired and were never given keys
+
+`OPENAI_WIRE_PROVIDERS` in `llm-resolver-vessel/src/index.ts` registers **groq**
+and **mistral** alongside chutes and openrouter, and places them deliberately
+high in the failover walk. The comment explains why: under load the fleet was
+"burning all four gemini models (each 45s cooling) before ever trying groq's
+llama-3.3, leaving the funded quota idle."
+
+**In this deployment `GROQ_API_KEY` and `MISTRAL_API_KEY` are empty**, and the
+construction loop does `if (!key) continue` — so both providers are skipped at
+boot and never enter `modelClientMap`. Confirmed at the receiver rather than
+inferred from the source: across every llm-resolver start in the journal, only
+`chutes` and `openrouter` are logged as constructed. groq and mistral never
+appear.
+
+Both vendors issue free API keys. **That is a no-payment path to lifting the
+floor**, and it is strictly cheaper than topping up a balance or replacing a
+paid key.
+
+### Recovery is automatic for credit, and requires a restart for keys
+
+The distinction matters operationally and follows directly from where each value
+is read.
+
+| action | takes effect | why |
+|---|---|---|
+| add credit to **chutes** or **openrouter** | **automatically, ≤30 min, no restart** | the client already exists; only a cooldown gates it |
+| set **`GROQ_API_KEY`** / **`MISTRAL_API_KEY`** | **needs `systemctl restart llm-resolver-vessel`** | provider clients are constructed once at module load; an absent key skips the provider entirely |
+| replace **`ANTHROPIC_API_KEY`** | **needs a restart** | read at module scope into a client at process start |
+
+The credit case needs no operator follow-up because the exhaustion memory is
+time-bounded and self-clearing: cooldowns expire (10 min for billing exhaustion,
+30 for the anthropic credit fallback, 15 for unauthenticated, 45s for rate
+limits), the provider is retried automatically when the window lapses, and a
+success clears the mark. The module's own comment states the intent — "when a
+key regains balance the substrate reverts to its preferred provider with no
+operator action" — and the observed behaviour matches it.
+
+Keys are frozen at process start because they are secrets, which law 1 places in
+the bootstrap tier. That is correct by design, not a defect; the consequence is
+simply that a key change is a restart and a credit change is not.
+
+### The refusal is not a defect, and `0 policy arm(s) checked` is not an empty registry
+
+Two things that look like bugs and are not, recorded so neither is chased:
+
+`armsChecked` is `availableModels.length` — policy arms **surviving the
+willingness filter**, not the size of the policy. `loadPolicy()` substitutes a
+five-arm `DEFAULT_POLICY` whenever the on-disk policy is missing or empty, so
+the arm registry cannot be empty. "0 policy arm(s) checked" means *none of the
+five arms is currently willing*, which is the true state of a dry plane.
+
+The last-resort guard refuses only after checking the configured default **and**
+every routable model outside the policy. Its `routableModels` parameter exists
+because an earlier, tighter version refused while `gemini-2.5-flash` answered on
+the first try. It is not refusing prematurely.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
