@@ -2739,14 +2739,54 @@ substrate-side changes are implied and neither needs a key:
    `verdict=BUSY` correctly as transient and says "retry when the lane is free."
    Nothing acts on that instruction. A goal that dies on a condition its own
    verdict calls transient is a loss the system chose.
-2. **Carry anchors and evidence into gap-derived goals.** The gap store already
-   holds `edit_site`, verbatim anchors and classification metadata for filed
-   gaps — the same material that made these three dispatches land. Whether that
-   reaches the drafter at prompt-build is the question §"the teaching channel"
-   raises, and it is answerable without credentials.
+2. ~~Carry anchors and evidence into gap-derived goals.~~ **RETRACTED within
+   the hour — see below. It is already done, and done better than by hand.**
 
-Both are gaps to file rather than fixes to absorb, and both are measurable the
-moment the plane is healthy enough to run a matched comparison.
+### Retraction: lever 2 was wrong, and reading the builder refutes it
+
+`gap-to-feature.ts` already grounds gap-derived goals against the **live file**.
+For any target under `repos/<vessel>/src/` it reads the real contents, centres a
+~40-line verbatim window on the edit site, and calls `groundedUniqueAnchor()` to
+emit a line *proven to occur exactly once*:
+
+```
+MATCH ANCHOR (this REAL line occurs EXACTLY ONCE in <file> — locate your edit
+relative to it, verbatim)
+```
+
+It adds `Change site:`, `Location:`, and prior-attempt feedback when the semantic
+gate has already rejected a draft for that gap. It also **deliberately withholds**
+the full `classification_metadata` dump, with a measured reason recorded inline:
+a gap that authored FAVORABLE (op_count 1, typecheck-clean) from a crisp spec
+came back UNFAVORABLE with 0 ops purely from the extra framing and JSON.
+
+That is *stronger* than what the three successful dispatches carried — they had a
+verbatim span, this has a **proven-unique** line plus a window plus failure
+feedback. The uniqueness guarantee is precisely what my own dispatch lacked when
+`feature_compose` refused it with `no_unique_anchor`.
+
+The claim was published without reading the builder. It should not have been.
+
+### What this leaves, and a confound that matters more than the rest
+
+With lever 2 refuted, the 3/3 vs 1/4 difference has to come from elsewhere:
+
+- **Op count.** The successful dispatches were single-op, single-file.
+  Gap-derived goals are frequently multi-op — the exact shape that lands partial
+  subsets through the escalation lane carrying no verdict.
+- **Retry.** Still live, still unacted-on by the system.
+- **Selection.** These were changes already root-caused to a specific line by an
+  operator. That is not a property of the goal text; it is a property of having
+  done the investigation first.
+- **Different code paths entirely.** This is the one that most weakens §Z's
+  framing: a goal naming a file routes through the **EARLY edit-intent** path,
+  not through `gap-to-feature` at all. So the comparison was never "same builder,
+  different input quality" — it was two different builders. §Z's table stands as
+  an observation; its explanation does not.
+
+The surviving claim is only this: **a single-op, file-naming, evidence-carrying
+goal, retried on transient capacity, landed three for three on a plane yielding
+2.4% to autonomous traffic.** Why is now open, and lever 2 is not the answer.
 
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
