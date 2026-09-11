@@ -3320,5 +3320,69 @@ table that discarded an undeclared field with `success:true` — the write path
 reports success on a value the read path can never match.
 
 
+---
+
+## AG. `semantic_reject` is not a diagnosis, it is a fallthrough
+
+§AF reported `semantic_reject` as the dominant autonomous compose failure at 65%.
+Reading the classifier changes what that number means.
+
+`feature-compose.ts:3066-3070` classifies a judge rejection by matching the
+reason string against four patterns — `empty_diff_identity_edit`,
+`dead_insertion_unwired`, `partial_spec_omission`, `wrong_location` — and then:
+
+```js
+return "semantic_reject";
+```
+
+**It is the fallthrough.** `semantic_reject` does not mean "the judge objected on
+semantic grounds"; it means **"the judge objected and the classifier could not
+tell why."** A 65% share is a statement about classifier coverage, not about
+drafts. The corpus bears this out: 695 of 2955 recorded lessons are
+`semantic_reject`, median reason length 184 characters — the reasons are
+detailed, specific, and being discarded into one bucket.
+
+### A hypothesis of mine, formed on four samples and refuted on 695
+
+The most recent rejections read as a clear pattern — the judge refusing
+observability work for "not changing behavior":
+
+> *"The patch does not change behavior because it adds an else branch to a
+> different logging path without executing any new code in the case where a
+> posterior delta is applied."*
+
+That is **`80e45a2a`**, this session's own fix. It is also **factually wrong**:
+the `else` fires precisely in the applied case, the patch landed on a subsequent
+attempt, and §AE measured nineteen `APPLIED` lines it emitted. Three more recent
+rejections are `61c02e1`, refused for *"only adds a log message… does not address
+the silent capacity loss."* Four for four, and it matches a class already on
+record from 2026-09-10, where a diagnostic-only rule refused a change whose
+purpose was adding logging.
+
+Measured across all 695 reasons, that class is **4.2%** — 29 instances. Real,
+and it hit this session twice, but nowhere near dominant. Neighbouring patterns:
+scope-creep refusals ("does not address…", "only adds…") 15.5%, hollow/unwired
+additions 9.6%, adversarial refuter panels 10.9%. Roughly 60% of rejections match
+none of them.
+
+**The sampling error is the lesson.** I read the most recent entries, and the
+most recent entries were my own patches, because I was the one dispatching. A
+recency sample of a log I am actively writing to is a sample of myself. The
+corpus was one query further on and says something different.
+
+### What this does and does not license
+
+An in-class fix is available and cheap: the reason strings are already persisted
+in `compose-lessons.jsonl`, so the classifier's pattern set can be extended from
+695 worked examples rather than guessed at. That is law 8 — the load-bearing
+information exists and is not being read at the point of use.
+
+It would not raise reach. It converts an unreadable 65% into a readable
+distribution, which is a precondition for diagnosing the drafter, not a fix to
+it. Stated explicitly because the pressure to report instrumentation as progress
+is exactly what law 7 warns against: **activity counts and better dashboards are
+not gap closure.**
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
