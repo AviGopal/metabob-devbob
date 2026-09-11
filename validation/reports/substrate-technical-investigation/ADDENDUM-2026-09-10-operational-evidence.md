@@ -2908,7 +2908,8 @@ this as the vessel being absent.
 ## AB. An escalation that only logs is not an escalation
 
 **Measured 2026-09-11.** Found while diagnosing why a dispatch refused for
-capacity — which turns out to be the same story.
+capacity. The two turned out **not** to be connected — see the retraction at the
+end of this section, which is the more useful half.
 
 `self-recovery-tick` has emitted
 
@@ -2960,18 +2961,48 @@ That gap would have been filed on 2026-09-07 with a one-line, actionable,
 self-diagnosed remedy in it. Instead the information was regenerated 18,784
 times and read zero times.
 
-### The cost is not only noise
+### The cost
 
 At the ~1.4s CPU each start reports consuming, 19,348 starts is on the order of
-**7.5 CPU-hours** spent re-deriving a constant. More immediately: a restart every
-three minutes, forever, is a permanent contribution to the load average.
+**7.5 CPU-hours** spent re-deriving a constant. Spread over four days that is
+about 0.08 of one core — real waste, but not a capacity problem.
 
-That closes a loop on this session's own work. The dispatch that led me here was
-refused with `CAPACITY (BUSY)`, and the retry was gated behind waiting for
-loadavg to fall below 9 — on a host sitting at 11.66 with a futile restart cycle
-running against it. **The measurement instrument and the thing being measured are
-connected**: unrecoverable-unit thrash is one of the inputs to the capacity
-refusals that cost this session two dispatch attempts.
+### ⚠ Retracted: I linked this to the capacity refusals, measuring the wrong machine
+
+I first wrote that the restart thrash was "a permanent contribution to the load
+average" and therefore an input to the `CAPACITY (BUSY)` compose refusals that
+cost this session two dispatch attempts. **That is wrong, and the way it was
+wrong is worth more than the claim.**
+
+I gated my retries on `/proc/loadavg` read **on the host**, and waited for it to
+fall below 9 while it sat at 11.66 and then climbed to 17.42. But the substrate
+runs inside a Docker Desktop `qemu-system-x86_64` VM. The host load average I was
+reading was dominated by Firefox, Hyprland, and a Steam session that had launched
+eighteen minutes earlier. **It is not a measurement of the machine the compose
+lane runs on.**
+
+Inside the container, at the same moment:
+
+```
+container loadavg: 6.61 8.03 6.94    nproc: 14
+```
+
+Comfortably under the gate. The substrate had capacity throughout, including at
+the moment I declined to retry "because load was 12.56." The arithmetic above
+says the same thing from the other direction: 0.08 of a core cannot cause a
+capacity refusal on a 14-core box.
+
+This is the standing rule — *verify at the layer that consumes the artifact* —
+failing in a new place. Every prior instance was a layer error **within** the
+system: checkout vs `/vessels/`, migration file vs `INFO FOR TABLE`, `src/` vs
+`dist/`. This one crossed the boundary out of the system entirely, onto the
+operator's desktop, and the reading was plausible the whole way: a number in the
+right units, in the expected range, moving in the expected direction, from a file
+that genuinely exists. Nothing about it announced that it described a different
+computer.
+
+The load gate should read container load. The `CAPACITY (BUSY)` and `draining`
+refusals remain unexplained, and are now known not to be explained by this.
 
 ### Operator decision, not a substrate fix
 
