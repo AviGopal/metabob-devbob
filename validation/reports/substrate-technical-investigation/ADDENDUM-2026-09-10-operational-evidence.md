@@ -3816,8 +3816,25 @@ text. Falls back to the full output when nothing matches, so the worst case is
 today's behaviour. Landed, clean tree, typechecks; `const lessonReason = String(`
 still appears exactly once.
 
-**Behavioural confirmation is still owed** — it needs the next natural verification
-failure, and I am not going to manufacture one.
+### ✅ Behaviourally confirmed, on a natural failure, 96 seconds after deploy
+
+Deployed 16:41:09Z. The very next lesson written, at 16:42:45Z:
+
+```
+syntax_break | src/resolvers/feature-compose.ts(6316,5): error TS1109: Expression expected.
+```
+
+Against the *same failure class, same file, same error* recorded eleven minutes
+earlier under the old code:
+
+```
+syntax_break | == install == == resolve == DRYRUN_EXIT=0 @types/bun@1.3.14 … $ tsc --noEmit src/resolver
+```
+
+Before: the dependency-install preamble, cut off mid-word. After: file, line,
+column and cause. Nothing was manufactured to obtain this — the substrate
+produced a verification failure on its own and, for the first time, wrote down
+what it was.
 
 ### The failure of the first attempt demonstrated the defect it was fixing
 
