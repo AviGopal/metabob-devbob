@@ -176,9 +176,42 @@ record survives only buried in the embedded digest. Filed as
 Dispatch labeled `partial` in the oracle corpus.
 
 This arc is one full detect→diagnose→repair-through-substrate→activate→
-independently-verify cycle repeated twice back-to-back on related defects —
-though both diagnoses were operator-authored, which is the distance remaining
-to deliverable 5's system-generated repair goals.
+independently-verify cycle repeated three times back-to-back on related defects
+(rebind slot gate `cd011e3`, compute-artifact oracle `d8b1d92`, bridge
+non-clobber `abb07ea`) — though all three diagnoses were operator-authored,
+and the goals contained the replacement code verbatim: substrate-*landed*, not
+yet substrate-*repaired*. That distance is deliverable 5's remaining work.
+
+## The composition ladder, demonstrated on the multistep family
+
+With the three fixes active, the ladder's rungs were then walked live, every
+green earned through the unrelaxed deterministic verification:
+
+- **Execute** — the compute+record goal reached with a verified deliverable
+  (note body exactly `307127`, confirmed stable *after* completion).
+- **Extract** — the walk recorded the composite
+  (`walk-composite-shellresult-to-memorynote-write`) and the 2-step goal-path
+  row `[satisfier:shellResult, satisfier:memoryNote_write]` accumulated
+  counters per reach.
+- **Exact reuse, selected and helping** — at 5/8 the store's 2-step pathway was
+  accepted via goal_hash (17:51:03), the tier-2 cached command replayed with
+  synthesis skipped (17:51:07), and the walk reached in **7 s** versus 30–90 s
+  of fresh derivation (17:51:10 green).
+- **New-inputs reuse + boundary adaptation** — a never-seen goal (811×977,
+  fresh title) accepted a nearby pathway via shape_signature borrow
+  (cover 0.50, donor 21/21), adapted the command correctly
+  (`console.log(811 * 977)` → 792347 ✓), and greened deterministically on the
+  first attempt in ~9 s, with the bridge writing its distinct note and the
+  named artifact intact.
+- **Combination** — the compute step inside this composition is the learned
+  arithmetic pathway from the first arc; the composition chains it with the
+  artifact write. (A purist combination of two independently *extracted*
+  compositions remains open.)
+
+Residual: neither `cd011e3` nor `d8b1d92`/`abb07ea` has a pinned test contract
+the way the first repair does (`6586f01`); the rebind gate especially can
+regress silently — its refusal tally makes behavior observable but nothing
+asserts it.
 
 ## Evidence
 
