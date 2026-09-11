@@ -3232,5 +3232,93 @@ formula appears exactly where it should. It shows the machinery is working
 correctly on an input stream that is almost entirely failure.
 
 
+---
+
+## AF. Why reach is 2.4%: the backlog grows, and the composer rejects itself
+
+Chasing the one discriminating fact from §AE — autonomous `feature_compose` is
+14-for-14 `reached:false` while three operator dispatches landed the same day.
+
+### The dominant autonomous failure is the semantic judge
+
+Recommit-triggering compose failures, 24h:
+
+| class | count | share |
+|---|---|---|
+| `semantic_reject` | 15 | **65%** |
+| `anchor_not_found` | 6 | 26% |
+| `typecheck_dangling_reference` | 2 | 9% |
+
+Not anchoring, not typecheck — **the judge refusing the draft**. Corroborated by
+the authoring-chain health report, which over a 100-execution scan gives
+`feature_compose` 3 preflight rejections, 1 other failure and **0 successes**,
+`health_verdict: BLOCKED`.
+
+### The gap ledger is running a deficit
+
+| | |
+|---|---|
+| open gaps | **1381** |
+| of which composable (watchdog `open_intents`) | **751**, climbing monotonically 731 → 751 over ~5h |
+| created, 24h | **859** |
+| closed, 24h | **752** |
+| **net** | **+107 open per day** |
+
+Open by category: `edit_intent_route` 391, `systematic_failure` 340,
+`missing_capability` 218. By source, 1097 of 1381 are `substrate_detected` — the
+system is detecting its own gaps faster than it can close them, which is the
+honest reading of law 7's triple: close *rate* is not the problem in isolation
+(752/day is real work), but it runs below the detection rate.
+
+Put beside §AE, the mechanism is no longer mysterious. A composable backlog of
+751 feeds a composer that is refused by its own semantic judge two times in
+three, and every one of those refusals lands as a β penalty on
+`feature_compose`. Reach at 2.4% for edit goals is what that arithmetic produces.
+
+### Three hypotheses killed before publication
+
+Recorded because the checks are the point, not the conclusions:
+
+1. **"`gap-compose.service` runs the wrong script."** Its effective `ExecStart`
+   is `watchdog-tick.ts`, never `gap-compose-tick.ts`, and it exits in the same
+   second it starts with no output. That is **deliberate and documented in the
+   unit itself** — a 2026-07-09 drop-in demotes the tick to a degraded-mode
+   watchdog because composable drain became event-triggered, and states the
+   reversal procedure. Intent, not defect.
+2. **"Compose failures keep the liveness marker fresh, so the watchdog never
+   fires."** `compose-lessons.jsonl` *is* written on failure — the last three
+   entries are `anchor_not_found`, `compose_execution_failure`,
+   `compose_execution_failure`, mtime 2m19s old. But the watchdog fired **23
+   times in 24h** with `stalled_min` up to 195. The marker does go stale. The
+   masking I predicted, by exact analogy to the one the drop-in records fixing
+   on 2026-07-29, does not occur.
+3. **"It stopped firing at 12:13, so it is broken now."** 12:13 is when the
+   deadlock fix (§X) landed and the compose flow resumed. A fresh marker after
+   that point is the flow being *alive*. The watchdog is correct to be quiet.
+
+### A small defect that is a clean instance of a class
+
+The gap status histogram:
+
+```
+closed 3426 | open 1381 | rejected 175 | resolved 8 | CLOSED 3
+{{gate_self_probe.status}} 2 | {{gap_compose.gap.status}} 1 | {{gap_lifecycle_scan}} 1
+{{gap_lifecycle_scan.status}} 1 | {{goal.status}} 1 | {{substrateGap.status}} 1
+```
+
+**Seven gaps carry a literal, uninterpolated template placeholder as their
+status**, and three more carry `CLOSED` against a corpus of 3426 `closed`. Those
+ten rows are neither open nor closed: invisible to every status filter, including
+the `open` query that produced the 1381 above and the backlog the watchdog
+counts.
+
+Ten rows out of ~5000 changes no conclusion here. It is worth recording because
+the class is not small: **a template placeholder that fails to render is written
+through to storage as data, silently, and the write succeeds.** Nothing rejected
+`{{goal.status}}` as a status value. This is the same shape as the schemafull
+table that discarded an undeclared field with `success:true` — the write path
+reports success on a value the read path can never match.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
