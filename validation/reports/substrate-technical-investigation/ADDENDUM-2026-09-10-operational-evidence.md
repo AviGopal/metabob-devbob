@@ -3856,5 +3856,58 @@ hundreds of times in a form that could not contain the name. **My evidence was a
 artifact of the bug I had not found yet.**
 
 
+---
+
+## AM. The headline reach rate is 48%, and 92% of it is the system scanning itself
+
+A closing measurement, recorded because the number is available, favourable, and
+wrong — and because a later reader will find it before they find the caveat.
+
+Over all executions today carrying a reach verdict:
+
+| | |
+|---|---|
+| `reached:true` | 2715 |
+| graded (`reached:true` or `reached:false`) | 5627 |
+| **rate** | **48.2%** |
+
+That is ten times the 5.0% this report has used throughout, and roughly twenty
+times the 2.4% for edit goals. It is not an improvement, and nothing that landed
+today produced it. **It is a different denominator.**
+
+Decomposing the 2717 `reached:true` executions by activity:
+
+| count | share | activity |
+|---|---|---|
+| 554 | 20.4% | `development-vessel:detect-execution_error_ribosome_extract` |
+| 354 | 13.0% | `development-vessel:detect-cascading_…_cyclic_flow_scan_tick` |
+| 349 | 12.8% | `docs-mgmt:docs-decision-deliver` |
+| 329 | 12.1% | `development-vessel:detect-cascading_…_draft_gap_closing_activity` |
+| 306 | 11.3% | `development-vessel:detect-unclassified_failure_…` |
+| 230 | 8.5% | `development-vessel:gate-self-probe-tick` |
+| 209 | 7.7% | `docs-mgmt:docs-decision-answer-scan` |
+| 174 | 6.4% | `conservation-bridge-tick` |
+
+**Top eight: 2505 of 2717 — 92%.** Every one is internal machinery inspecting the
+substrate's own state on a timer. Not one is a useful goal.
+
+CLAUDE.md names this exactly: *"A high reach rate on trivial goals is a gamed
+metric; the expectation applies to useful work."* This is what that looks like
+when measured. A detector tick that scans for a condition and finds none has
+reached, honestly and correctly, by its own contract — and aggregating those with
+goal walks produces a number that describes the fleet's timer cadence rather than
+its capability.
+
+**The 5.0% / 2.4% figures remain the honest ones**, because they are goal-level
+and drawn from the verification-label corpus (4302 rows) rather than from every
+traced execution. Reach on arbitrary useful goals did not move today.
+
+Stated plainly for whoever reads this next: **if you query reach at the execution
+level you will get roughly 48% and it will mean almost nothing.** Partition by
+activity before believing it. The same rule that retired the `reach_ungraded`
+alarm in §AA applies here in the opposite direction — there an alarming aggregate
+dissolved under partition, here a reassuring one does.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
