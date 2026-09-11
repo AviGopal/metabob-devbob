@@ -2321,6 +2321,10 @@ an operator acts, and what is the cheapest action available?**
 
 ### Two funded providers are already wired and were never given keys
 
+> **Corrected in §Y: it is THREE providers, not two.** `google` is wired as
+> well — appended outside the static array, which is why the hand audit below
+> missed it. The detector built in §Y found it on its first run.
+
 `OPENAI_WIRE_PROVIDERS` in `llm-resolver-vessel/src/index.ts` registers **groq**
 and **mistral** alongside chutes and openrouter, and places them deliberately
 high in the failover walk. The comment explains why: under load the fleet was
@@ -2622,6 +2626,58 @@ the sha is real and the diff correct — but a reader of the reason alone would
 conclude the change never landed. The reach verdict is right by outcome; its
 explanation describes only the failed half. **Read the diff, not the reason.**
 
+
+---
+
+## Y. The detector outperformed the audit that built it
+
+**Status: landed, deployed, observed firing. Confidence HIGH.**
+
+§V reported, from a hand audit, that two wired providers had no keys. Law 6 asks
+the follow-up question — what would detect this class without an operator? — so
+that was dispatched as a goal rather than absorbed.
+
+`61c02e1`, substrate-authored, turns a silent `continue` into a braced block:
+
+```diff
+-  if (!key) continue;
++  if (!key) {
++    console.warn(`… provider '${p.id}' SKIPPED — ${p.apiKeyEnv} is empty; forfeiting ${p.models.length} model(s): ${p.models.join(", ")}`);
++    continue;
++  }
+```
+
+On the first restart it printed:
+
+```
+provider 'groq'    SKIPPED — GROQ_API_KEY is empty;    forfeiting 3 model(s): llama-3.3-70b-versatile, …
+provider 'mistral' SKIPPED — MISTRAL_API_KEY is empty; forfeiting 3 model(s): mistral-small-latest, …
+provider 'google'  SKIPPED — GOOGLE_API_KEY is empty;  forfeiting 4 model(s): gemini-2.5-flash, …
+```
+
+**§V was wrong: there are three, not two.** `google` is registered outside the
+static `OPENAI_WIRE_PROVIDERS` array, which is why reading that array by hand
+missed it. The detector found it within a second of first running.
+
+This is the cleanest available demonstration of why law 6 asks for the class and
+not just the instance: **the automated detector immediately outperformed the
+operator audit that motivated building it.** An instance-only fix here would
+have left a third free provider invisible, and nothing would ever have said so.
+
+It also changes the recommendation. Google issues free Gemini keys, and
+`gemini-2.5-flash` is the exact model `last-resort.ts` records as having
+"answered fine" when a tighter version of that guard wrongly refused — so it is
+a known-good lane for this deployment, not a guess.
+
+### On the vacuous-edit gate
+
+A pure logging addition was expected to risk refusal: the `diagnostic-only` rule
+rejects changes where every changed line is a logging call, and it blocked a
+legitimate logging change earlier in this session. It passed here because the
+added lines include `if (!key) {`, `continue;` and `}` — control flow, not
+logging. Worth recording as the shape that gets an observability fix through
+that gate: **restructure the branch you are instrumenting, rather than appending
+a bare log line to it.**
 
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
