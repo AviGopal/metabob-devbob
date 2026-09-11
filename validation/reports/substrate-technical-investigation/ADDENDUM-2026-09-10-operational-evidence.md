@@ -2405,8 +2405,21 @@ the event loop.
 
 `self-recovery-tick` then declares `UNHEALTHY: development-vessel (:8090) —
 restarting` on essentially every tick — 11:51:45, 11:54:45, 11:57:45, 12:00:45,
-12:03:45, exactly every three minutes. Effective availability is about **65%**:
-healthy for two minutes, hard-stalled for one, restarted, repeat.
+12:03:45, exactly every three minutes.
+
+**The healthy window is not stable, and the next cycle was far worse.** After
+the 12:03:45 restart the vessel answered for only about **28 seconds**, and this
+time it ramped rather than dropping cleanly — 0.0009s, 0.12s, 0.18s, 1.92s,
+0.24s — before going fully dark at 12:04:28 and staying dark through 12:06:43,
+when the poll ended. That is 2m15s of continuous unavailability inside a
+three-minute cycle, or roughly **16% availability** for that cycle against
+something nearer 65% for the one before it.
+
+So the shape varies between cycles — one abrupt, one with a visible latency ramp
+— but every cycle ends the same way, in total unresponsiveness until the
+watchdog kills it. Any single-cycle availability figure understates the
+variance; what is stable is the three-minute restart cadence, not the fraction
+of it the vessel is usable.
 
 The vessel's own log corroborates this independently. Across the silent window
 11:58:23 → 12:00:45 it logged nothing at all, and the **30-second `gc-tick`
