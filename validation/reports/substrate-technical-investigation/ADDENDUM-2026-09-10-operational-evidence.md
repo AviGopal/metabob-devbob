@@ -3480,5 +3480,77 @@ comment made false by a behavioural change that is *not* going to be reverted �
 has no route through this lane.
 
 
+---
+
+## AI. 2955 specific failures are recorded; the drafter is taught 27 generalities
+
+§AH ended with my claim that the lesson channel fails because the corpus
+vocabulary cannot be matched by anything a first-attempt compose has to query
+with. That framing was wrong, and testing it produced the real answer.
+
+### The corpus is 27 rows
+
+Enumerated from concept-db: the `compose_lesson` corpus contains **27 distinct
+texts**. Every one is a general rule — *"anchors must be copied verbatim from the
+CURRENT file"*, *"new code must be WIRED to a live path"*, *"typecheck,
+target-touched and write-only gates check STRUCTURE, not meaning"*.
+
+Meanwhile `/workspace/proposals/compose-lessons.jsonl` holds **2955 recorded
+lesson events**, each carrying the judge's specific reason, median length 184
+characters, 695 of them `semantic_reject`.
+
+### Where the specificity goes
+
+`feature-compose.ts:3223`. `appendComposeLesson(cls, reason, …)` receives the
+reason and mirrors this:
+
+```js
+content: `compose failure class ${cls}: ${COMPOSE_LESSON_GUIDANCE[cls] ?? "avoid repeating this failure class"}`,
+```
+
+**Class plus a static guidance-map lookup. `reason` is never written.** The
+corpus cannot grow past the size of that map however many failures accumulate,
+and it holds no task-specific information at all.
+
+That is law 8 in its exact form: the load-bearing fact — *why a change of this
+kind was rejected* — is captured, and is not made available at the moment of use.
+
+### Which means retrieval was never the problem
+
+With 27 rows and `limit: 8`, the drafter receives roughly a third of the entire
+corpus. There is no query key that can make generalities specific, because there
+is no specificity in there to find. Two attempts confirm it:
+
+- **Spec text as the key** (`95d973e6`): 0–1 lessons instead of 8. Reverted in
+  `b865620b`. §AH.
+- **Target file basename as the key**: `feature-compose.ts` → 8 and
+  `compose-slots.ts` → 8, but `substrate-gap.ts`, `index.ts`,
+  `posterior-update.ts` and `last-resort.ts` → 0. The two that "work" contain the
+  token **compose**, which matches *"compose failure class…"* in every row. The
+  match is on the word, not the file — and the content returned for
+  `feature-compose.ts` is generic `syntax_break` / `verify_failed` guidance with
+  nothing to do with that file.
+
+This vindicates the revert for a better reason than the one given at the time,
+and it retires the "fixed eight rows" complaint in the code comment: presenting
+eight of twenty-seven general rules is a reasonable thing to do. What is wrong is
+the header asserting they are *"this substrate's own rejected composes"*, which
+promises specificity the corpus does not contain.
+
+### Filed, deliberately not dispatched
+
+Gap `the-drafter-is-taught-27-generic-rules-from-2955-specific-failures`,
+`operator_decision_required`, verified by re-read.
+
+Writing the reason into the mirrored content would turn a fixed 27-row corpus
+into a large one — at which point query keying starts to matter and the whole
+retrieval path changes character. That is a substantial change to what the
+drafter is told at prompt-build time, needing decisions about content, dedup and
+retention. It is not a one-line edit, and I shipped and reverted a regression on
+this exact code path earlier the same day. The falsifier on the gap is explicit
+that adding entries to `COMPOSE_LESSON_GUIDANCE` does not close it: that grows
+the generalities and leaves the specificity discarded.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
