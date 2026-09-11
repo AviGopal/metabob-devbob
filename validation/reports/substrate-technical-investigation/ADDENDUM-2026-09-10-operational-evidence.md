@@ -3597,11 +3597,33 @@ I ran was in an *ordinary checkout* — the one condition under which the code
 works. I tested the environment the failure cannot occur in and concluded the
 failure was not real.
 
-Point 3 is worse than useless and I read it backwards: an isolated-compose verify
-failure rolls back *before* a lesson is written, so the corpus **cannot** contain
-these. Absence there was never evidence of rarity; it was a consequence of the
-failure mode. It took a second occurrence, on an unrelated change, to make me read
-the test body instead of its name.
+Point 3 is worse than useless, and my first explanation of it was also wrong.
+
+I wrote that an isolated-compose verify failure rolls back *before* a lesson is
+written, so the corpus could not contain these. **That is false.** The corpus
+holds **401 `verify_failed` rows**. Measured afterwards:
+
+| | |
+|---|---|
+| `verify_failed` rows | **401** |
+| ...naming the `git_status` test | **0** |
+| ...whose reason *starts* with the build-log preamble | **123** |
+| median reason length | **200 chars** |
+
+The failures are recorded. The `reason` is truncated to roughly 200 characters
+holding the **head** of the build log — `== install ==`, `== resolve ==`,
+`DRYRUN_EXIT=0`, `@types/bun@1.3.14` — and the failing test appears far later in
+that output, so it is never captured. **The corpus contains 401 records of
+verification failure and cannot tell you what failed.**
+
+So the search that returned zero was not evidence of rarity, and not evidence of
+the records being absent either. It was evidence that the stored reason is the
+least informative 200 characters available. The same defect surfaced
+independently in §AK, where three of eight prompt lines render as install
+preamble — one root cause, two symptoms.
+
+It took a second occurrence, on an unrelated change, to make me read the test body
+instead of its name.
 
 ### The fix and its confirmation
 
