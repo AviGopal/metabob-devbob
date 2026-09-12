@@ -64,6 +64,7 @@ interface ProbeVerdict {
   verdict_source: 'deterministic'
   witness: Witness
   class?: string
+  clears?: string
   evidence: Record<string, unknown>
   undecidable_reason: string | null
   ts: number
@@ -74,7 +75,13 @@ const verdicts: ProbeVerdict[] = []
 function record(
   invariant: string,
   verdict: Verdict,
-  opts: { witness: Witness; cls?: string; evidence?: Record<string, unknown>; reason?: string; config?: Record<string, string> },
+  // `clears` is how a PASS becomes a gap CLOSURE, and it is deliberately an explicit
+  // positive assertion rather than something inferred. The alternative — "the class stopped
+  // being reported, so it must be fixed" — is exactly the reasoning that stranded
+  // fed:overlay_unjoinable: a class vanished because an unrelated HTTP endpoint started
+  // answering, and absence read as success. A check may only close a gap by NAMING the
+  // class it just proved clear.
+  opts: { witness: Witness; cls?: string; clears?: string; evidence?: Record<string, unknown>; reason?: string; config?: Record<string, string> },
 ): ProbeVerdict {
   // I10 enforced HERE, at the single choke point, so no leg can route around it: a
   // reachability claim whose only witness is the transport is downgraded. Static
@@ -96,6 +103,10 @@ function record(
     verdict_source: 'deterministic',
     witness: opts.witness,
     ...(opts.cls ? { class: opts.cls } : {}),
+    // A `clears` claim survives only on an actual PASS. If the verdict was downgraded (I10
+    // self-witness, or any undecidable), the claim is dropped rather than carried — a
+    // downgraded row must never close anything.
+    ...(opts.clears && v === 'pass' ? { clears: opts.clears } : {}),
     evidence: opts.evidence ?? {},
     undecidable_reason: reason,
     ts: Date.now(),
@@ -177,6 +188,7 @@ interface SweepState {
   last_sweep_id?: string
   restarts?: Record<string, number>
   failing?: Record<string, number> // class -> consecutive QUIESCENT sweeps failing
+  clearing?: Record<string, number> // class -> consecutive SOUND sweeps proven clear (closure hysteresis)
 }
 function readState(): SweepState {
   try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')) as SweepState } catch { return {} }
@@ -216,7 +228,7 @@ function checkHardcodedPeerEndpoint() {
   }
 
   if (!effIp && sources.length === 0) {
-    record('I1_no_frozen_address', 'pass', { witness: 'static', evidence: { effective_environment: effMatch?.[1] ?? '(unset)' } })
+    record('I1_no_frozen_address', 'pass', { witness: 'static', clears: 'hardcoded_peer_endpoint_in_image', evidence: { effective_environment: effMatch?.[1] ?? '(unset)' } })
     return
   }
   record('I1_no_frozen_address', 'fail', {
@@ -254,7 +266,7 @@ function checkAnchorPrecedence() {
     .map((k) => ({ key: k, etc_substrate_env: base[k] ?? '(unset)', substrate_secrets: secrets[k] }))
 
   if (conflicts.length === 0) {
-    record('I2_anchor_precedence', 'pass', { witness: 'static', evidence: { checked: ANCHORS } })
+    record('I2_anchor_precedence', 'pass', { witness: 'static', clears: 'bootstrap_env_precedence_inversion', evidence: { checked: ANCHORS } })
     return
   }
   record('I2_anchor_precedence', 'fail', {
@@ -319,6 +331,7 @@ function checkTransportUnit(prev: SweepState, endState: UnitState, churnedInSwee
   } else if (st.active === 'active' && !crashed) {
     record('I2_join_overlay', 'pass', {
       witness: 'static',
+      clears: 'transport_unit_flapping',
       evidence: { active: st.active, result: st.result, n_restarts: st.nRestarts, note: 'stable across both in-sweep samples' },
     })
   } else {
@@ -364,7 +377,7 @@ async function checkBootstrapAnchors() {
       },
     })
   } else {
-    record('I3_join_door_honest', 'pass', { witness: 'static', evidence: { identity_endpoint: idEp, discovery_endpoint: discEp } })
+    record('I3_join_door_honest', 'pass', { witness: 'static', clears: 'join_door_host_dependent', evidence: { identity_endpoint: idEp, discovery_endpoint: discEp } })
   }
 
   if (relays.length === 0) {
@@ -376,7 +389,7 @@ async function checkBootstrapAnchors() {
       },
     })
   } else {
-    record('I2_relay_anchor', 'pass', { witness: 'static', evidence: { relay_multiaddrs: relays } })
+    record('I2_relay_anchor', 'pass', { witness: 'static', clears: 'no_relay_anchor', evidence: { relay_multiaddrs: relays } })
   }
   return { relays }
 }
@@ -420,6 +433,7 @@ async function checkForeignVantageReachability() {
     const routableOffHost = addrs.some((m) => !/\/ip4\/(127\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[01]\.|10\.|192\.168\.)/.test(m))
     record('I1_foreign_vantage_reachable', 'pass', {
       witness: 'probe',
+      clears: 'no_circuit_advertised',
       evidence: {
         registered: vessels.length,
         with_circuit: circuitBearing.length,
@@ -548,7 +562,7 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
   } else if (reservations === 0) {
     record('I2_join_overlay', 'fail', { witness: 'probe', cls: 'overlay_unjoinable', evidence: { relays, active_reservations: 0 } })
   } else {
-    record('I2_join_overlay', 'pass', { witness: 'probe', evidence: { relays, active_reservations: reservations } })
+    record('I2_join_overlay', 'pass', { witness: 'probe', clears: 'overlay_unjoinable', evidence: { relays, active_reservations: reservations } })
   }
 
   // Candidate targets, from the registry rather than the hint where possible.
@@ -565,7 +579,7 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
       await resolveViaLibp2p(probe, target, { type: 'federation_probe' })
       const pt = pathTaken(probe, targetPeer)
       if (pt.limited === true) {
-        record('I4_forced_relay', 'pass', { witness: 'probe', config: { path: 'forced-relay' }, evidence: { dial_target: target, connection_limited: true, addr: pt.addr } })
+        record('I4_forced_relay', 'pass', { witness: 'probe', clears: 'relay_dial_failed', config: { path: 'forced-relay' }, evidence: { dial_target: target, connection_limited: true, addr: pt.addr } })
         await runPayloadMatrix(probe, target, 'forced-relay', 'lpStream')
         await runPayloadMatrix(probe, target, 'forced-relay', 'http')
       } else {
@@ -594,7 +608,7 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
       const after = probe.health().holePunchSuccess
       if (pt.limited === false) {
         record('I5_direct_preferred', 'pass', {
-          witness: 'probe', config: { path: 'direct-preferred' },
+          witness: 'probe', clears: 'punchthrough_unavailable', config: { path: 'direct-preferred' },
           evidence: { dial_target: targetPeer, path_taken: 'direct', connection_limited: false, addr: pt.addr, hole_punch_delta: after - before },
         })
         await runPayloadMatrix(probe, targetPeer, 'direct-preferred', 'lpStream')
@@ -626,7 +640,7 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
           evidence: { rows_returned: got.length, note: 'an uncredentialed peer read the registry over the overlay' },
         })
       } else {
-        record('I9_ingress_authenticated', 'pass', { witness: 'probe', evidence: { note: 'uncredentialed overlay resolve reached the ingress and returned nothing' } })
+        record('I9_ingress_authenticated', 'pass', { witness: 'probe', clears: 'federation_ingress_unauthenticated', evidence: { note: 'uncredentialed overlay resolve reached the ingress and returned nothing' } })
       }
     } catch (e) {
       // A THROWN DIAL IS NOT A REFUSAL. This catch used to grade every throw as
@@ -648,7 +662,7 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
         })
       } else {
         record('I9_ingress_authenticated', 'pass', {
-          witness: 'probe',
+          witness: 'probe', clears: 'federation_ingress_unauthenticated',
           evidence: { error: msg, note: 'the ingress was reached and rejected the uncredentialed resolve' },
         })
       }
@@ -919,6 +933,37 @@ async function main() {
   const reportedClasses = new Set(real.filter((r) => r.class).map((r) => r.class!))
   const noLongerReported = Object.keys(prev.failing ?? {}).filter((c) => !reportedClasses.has(c))
 
+  // ── CLOSURE. Law 7 measures gap close rate, latency and durability, and a store that
+  // only ever files is a ratchet, not a measure: before this, fed:transport_unit_flapping
+  // stayed open while the defect it names was demonstrably repaired and live.
+  //
+  // Three rules keep a close honest, and each exists because of a specific way closure
+  // goes wrong in this system:
+  //   1. POSITIVE ASSERTION ONLY. A class closes because a PASS row NAMED it (`clears`),
+  //      never because the class stopped appearing. Absence-as-success is what stranded
+  //      fed:overlay_unjoinable.
+  //   2. NO CONTRADICTION IN THE SAME SWEEP. If any row still FAILS with that class, the
+  //      clear does not count — some config classes decide the same class more than once.
+  //   3. SYMMETRIC HYSTERESIS. Two consecutive QUIESCENT sweeps, the same bar as filing.
+  //      Closing on a single green reading is how a gap store fills with things that
+  //      reopen wearing a different hat; closing slowly costs one cadence interval and
+  //      buys durability, which is the third term of the triple.
+  // A sweep whose controls did not fire cannot close anything at all.
+  const cleared = new Set(real.filter((r) => r.verdict === 'pass' && r.clears).map((r) => r.clears!))
+  const stillFailing = new Set(real.filter((r) => r.verdict === 'fail' && r.class).map((r) => r.class!))
+  const clearingNow = [...cleared].filter((c) => !stillFailing.has(c))
+
+  const clearing: Record<string, number> = {}
+  const sweepIsSound = quiescent && ncFailed.length === 0
+  if (sweepIsSound) {
+    for (const c of clearingNow) clearing[c] = (prev.clearing?.[c] ?? 0) + 1
+  } else {
+    Object.assign(clearing, prev.clearing ?? {})
+  }
+  const closeEligible = Object.entries(clearing).filter(([, n]) => n >= 2).map(([c]) => c)
+  // A class that just proved clear must also stop accruing toward a re-file.
+  for (const c of clearingNow) delete failing[c]
+
   const report = {
     sweep_id: SWEEP_ID, probe_id: PROBE_ID, substrate: SUBSTRATE_ID,
     planned: real.length, attempted: real.length, decided,
@@ -989,6 +1034,31 @@ async function main() {
   }
   ;(report as Record<string, unknown>).gaps_emitted = emittedGaps
 
+  // Close what has been proven clear for two consecutive sound sweeps. The closure body
+  // records WHAT proved it, so a reader can audit the close rather than trusting the
+  // status field — the same reason a gap's falsifier is carried in summary.
+  const closedGaps: string[] = []
+  for (const cls of closeEligible) {
+    const proof = real.filter((r) => r.clears === cls)
+    const note =
+      `CLOSED BY MEASUREMENT, not by assertion. The closure predicate for this class was evaluated by ` +
+      `federation-probe-tick and passed on ${clearing[cls]} consecutive sweeps that were both QUIESCENT ` +
+      `(no unit changed MainPID or NRestarts during them) and had every negative control firing. ` +
+      `Proven by: ${proof.map((r) => `${r.invariant} PASS ${JSON.stringify(r.evidence)}`).join(' || ')} ` +
+      `|| Closure required a verdict row to NAME this class as cleared; a class merely ceasing to be ` +
+      `reported never closes a gap here, because absence and repair are indistinguishable from the outside. ` +
+      `|| Re-opens automatically if the class fails again for 2 consecutive quiescent sweeps.`
+    try {
+      await post(`${DEV_VESSEL}/v2/impulses/resolve`, {
+        impulse: { pointer: { type: 'substrateGap_write', id: `fed:${cls}`, status: 'closed', closed_reason: 'falsifier_satisfied', summary: note } },
+      }, 6000)
+      closedGaps.push(`fed:${cls}`)
+    } catch { /* a close that failed to write must not abort the sweep */ }
+  }
+  ;(report as Record<string, unknown>).gaps_closed = closedGaps
+  ;(report as Record<string, unknown>).close_eligible_classes = closeEligible
+  ;(report as Record<string, unknown>).clearing_streak = clearing
+
   // ── Emit over loopback. The channel and its subject share no medium, which is what
   // lets this report "the overlay is down" at all. Emitted AFTER gap filing so the report
   // carries what was actually filed rather than what was intended.
@@ -1011,6 +1081,7 @@ async function main() {
     last_sweep_id: SWEEP_ID,
     restarts: Object.fromEntries([...rosterBefore.values()].map((s) => [s.unit, s.nRestarts])),
     failing,
+    clearing,
   })
 
   if (JSON_ONLY) {
@@ -1028,6 +1099,8 @@ async function main() {
     console.log(`  quiescent: ${quiescent}${churned.length ? ` (churned: ${churned.join(', ')})` : ''}`)
     console.log(`  negative_controls: ${JSON.stringify(nc)}`)
     console.log(`  sweep_validity: ${report.sweep_validity}`)
+    if (closedGaps.length) console.log(`  ✅ gaps CLOSED this sweep: ${closedGaps.join(', ')}`)
+    if (closeEligible.length && !closedGaps.length) console.log(`  close_eligible (write failed?): ${closeEligible.join(', ')}`)
     if (noLongerReported.length) console.log(`  ⚠ classes_no_longer_reported (was failing, emitted no verdict this sweep): ${noLongerReported.join(', ')}`)
     console.log(`  gap_eligible (>=2 consecutive quiescent sweeps): ${gapEligible.length ? gapEligible.join(', ') : 'none yet'}\n`)
   }
