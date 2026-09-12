@@ -663,7 +663,15 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
     const target = circuits[0]!
     try {
       await withTimeout(resolveViaLibp2p(probe, target, { type: 'federation_probe' }), 20_000, 'forced-relay probe dial')
-      const pt = pathTaken(probe, targetPeer)
+      // Check the connection to the peer WE ACTUALLY DIALLED, not to whichever peer the
+      // transport's health hint happens to name. With a single circuit in the registry
+      // those coincide; the moment a second substrate federates they stop coinciding, and
+      // this looked up a connection to the LOCAL transport while having dialled the PEER's
+      // circuit — finding none, and scoring a working relay path as
+      // relay_address_not_honoured. The dialled multiaddr already carries the peer id it
+      // ends with; that is the authority.
+      const dialledPeer = target.split('/p2p/').pop() ?? targetPeer
+      const pt = pathTaken(probe, dialledPeer)
       if (pt.relayed === true) {
         record('I4_forced_relay', 'pass', { witness: 'probe', clears: 'relay_address_not_honoured', config: { path: 'forced-relay' }, evidence: { dial_target: target, path_taken: 'relay', relayed: true, connection_limited: pt.limited, relay_caps_circuits: pt.limited, addr: pt.addr } })
         await runPayloadMatrix(probe, target, 'forced-relay', 'lpStream')
