@@ -923,6 +923,39 @@ async function main() {
     churned.includes(TRANSPORT),
   )
 
+  // THE CLASS, NOT THE INSTANCE. The transport's crash loop was detected because a check
+  // was written for that one unit — and then federation-relay was installed and reproduced
+  // the identical failure shape (hard-exit on a missing bootstrap value under
+  // Restart=always, so it parks in `activating` and never reports `failed`). A detector
+  // aimed at one unit would have missed it, and the operator would have found it by hand
+  // again. Every federation unit is now checked for the same signature.
+  //
+  // Deliberately reported as ONE gap class with the offending units named, not one gap per
+  // unit: the defect is a shared pattern in how these units treat a missing value, and
+  // filing it per-unit would fragment one repair into several.
+  const FED_UNITS = ['federation-relay.service', 'discovery-vessel.service', 'goal-host-vessel.service']
+  const flappers: Array<Record<string, unknown>> = []
+  for (const u of FED_UNITS) {
+    const before = rosterBefore.get(u)
+    const after = rosterAfter.get(u) ?? unitState(u)
+    if (!before || after.masked) continue
+    const crashed = after.result === 'exit-code' || after.result === 'signal' || after.result === 'core-dump'
+    if (churned.includes(u) || (after.active === 'activating' && crashed)) {
+      flappers.push({ unit: u, active: after.active, result: after.result, n_restarts: after.nRestarts, churned_in_sweep: churned.includes(u) })
+    }
+  }
+  if (flappers.length > 0) {
+    record('I11_no_silent_crash_loop', 'fail', {
+      witness: 'static', cls: 'federation_unit_flapping',
+      evidence: { units: flappers, note: 'a unit hard-exiting under Restart=always parks in `activating` and never reports `failed`, so no ActiveState check above it fires' },
+    })
+  } else {
+    record('I11_no_silent_crash_loop', 'pass', {
+      witness: 'static', clears: 'federation_unit_flapping',
+      evidence: { checked: FED_UNITS, note: 'no federation unit churned across this sweep or sits activating after a non-zero exit' },
+    })
+  }
+
   // QUIESCENCE EXCLUDES UNITS ALREADY JUDGED TERMINALLY BROKEN. A unit in a permanent
   // crash loop churns on every sweep, so counting it would make every sweep
   // non-quiescent, and the hysteresis gate would then never let its OWN gap mint. The
@@ -1057,6 +1090,7 @@ async function main() {
     // ActiveState=active with Result=success during its up-phase, so an instant snapshot
     // is satisfiable by a unit that is still crash-looping. Closure requires NRestarts
     // and MainPID unchanged across two samples bracketing a full sweep.
+    federation_unit_flapping: 'every federation unit (relay, discovery, goal-host) shows NRestarts and MainPID unchanged across two samples bracketing a full sweep, and none sits in `activating` after a non-zero exit.',
     transport_unit_flapping: 'federation-transport-vessel.service shows NRestarts AND MainPID unchanged across two samples bracketing a full sweep interval (an instantaneous ActiveState=active / Result=success does NOT satisfy this — the unit reports exactly that during each up-phase of its crash loop).',
     join_door_host_dependent: 'GET /bootstrap returns a non-empty discovery_endpoint and a non-loopback identity_endpoint when queried under a foreign Host header.',
     no_relay_anchor: 'GET /bootstrap returns a non-empty relay_multiaddrs, OR the transport holds a reservation with no relay anchor configured (direct-only overlay is a valid answer).',
