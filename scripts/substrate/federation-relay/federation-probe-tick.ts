@@ -962,8 +962,25 @@ async function main() {
   // worst failure on the box would be the one thing that could never be filed — the
   // failure suppressing the report about itself. Churn from a unit under a terminal
   // verdict is a known condition, not an in-flight cutover.
+  // QUIESCENCE IS SCOPED TO UNITS A FEDERATION VERDICT CAN DEPEND ON. Judging it over
+  // EVERY unit on the box was too broad and it showed up immediately: a sweep was marked
+  // non-quiescent because `m1-trainer.service` restarted, which blocked a gap closure that
+  // had nothing to do with it. On a substrate that develops itself something is almost
+  // always restarting, so an all-units rule makes quiescence rare — and since BOTH filing
+  // and closing require it, the hysteresis gate would spend most of its life shut and the
+  // gap store would stop tracking reality in either direction.
+  //
+  // The relevant set is the units whose state can actually move a verdict here: the
+  // overlay itself, the registry the verdicts are read from, and the vessels that serve
+  // the shapes under test. Everything else is recorded as background churn for context.
+  const RELEVANT = new Set([
+    TRANSPORT, 'federation-relay.service', 'discovery-vessel.service',
+    'goal-host-vessel.service', 'development-vessel.service', 'activity-api.service',
+  ])
   const churnedExcludingTerminal = churned.filter((u) => !(u === TRANSPORT && transportFlapping))
-  const quiescent = churnedExcludingTerminal.length === 0
+  const churnedRelevant = churnedExcludingTerminal.filter((u) => RELEVANT.has(u))
+  const churnedBackground = churnedExcludingTerminal.filter((u) => !RELEVANT.has(u))
+  const quiescent = churnedRelevant.length === 0
 
   // ── Report ────────────────────────────────────────────────────────────────────────
   const real = verdicts.filter((v) => v.invariant !== 'NC7_self_witness')
@@ -1059,7 +1076,7 @@ async function main() {
     coverage_fraction: real.length ? decided / real.length : 0,
     coverage_denominator: 'invariant x applicable-config-class; undecidable does NOT count as decided',
     blocking_reason: blocking,
-    quiescent, churned_units: churned,
+    quiescent, churned_units: churnedRelevant, background_churn: churnedBackground,
     masked_by_selection: masked, selection_in_force: selection || '(none set)',
     consecutive_failing_sweeps: failing,
     gap_eligible_classes: gapEligible,
@@ -1186,7 +1203,7 @@ async function main() {
     }
     console.log(`\n  coverage ${(report.coverage_fraction * 100).toFixed(0)}%  (${decided}/${real.length} decided: ${passed} pass, ${failed} fail, ${undecided} undecidable)`)
     console.log(`  blocking_reason: ${blocking ?? 'none'}`)
-    console.log(`  quiescent: ${quiescent}${churned.length ? ` (churned: ${churned.join(', ')})` : ''}`)
+    console.log(`  quiescent: ${quiescent}${churnedRelevant.length ? ` (relevant churn: ${churnedRelevant.join(', ')})` : ''}${churnedBackground.length ? ` [background churn ignored: ${churnedBackground.join(', ')}]` : ''}`)
     console.log(`  negative_controls: ${JSON.stringify(nc)}`)
     console.log(`  sweep_validity: ${report.sweep_validity}`)
     if (closedGaps.length) console.log(`  ✅ gaps CLOSED this sweep: ${closedGaps.join(', ')}`)
