@@ -267,7 +267,7 @@ function checkAnchorPrecedence() {
   })
 }
 
-function checkTransportUnit(prev: SweepState): { flapping: boolean; state: UnitState } {
+function checkTransportUnit(prev: SweepState, endState: UnitState, churnedInSweep: boolean): { flapping: boolean; state: UnitState } {
   // THE TRAP THIS EXISTS TO AVOID: the transport parks in `activating` under
   // Restart=always and NEVER reaches `failed`. A naive "activating means rolling, defer"
   // rule would make this oracle permanently silent about precisely the unit that is
@@ -280,15 +280,27 @@ function checkTransportUnit(prev: SweepState): { flapping: boolean; state: UnitS
   // 23 -> 4 between two sweeps 67s apart. A monotonic test on a non-monotonic counter
   // reports the loudest failure on the box as "rolling".
   //
-  // `Result` is the signal that does not reset: an `activating` unit whose Result is
-  // already `exit-code` has exited non-zero at least once and is being restarted — which
-  // is a crash loop, distinguishable from a genuine first start (Result=success) with no
-  // cross-sweep state at all. Counter CHANGE (≠, not >) is kept as corroboration.
-  const st = unitState('federation-transport-vessel.service')
+  // AND NO SINGLE SAMPLE CAN TELL. The second version keyed on `Result=exit-code` while
+  // `activating`, and the verdict then VANISHED from two consecutive sweeps — sampled
+  // during the unit's brief up-phase it emitted nothing at all, so the loudest failure on
+  // the box silently left the denominator. Sampling the real unit every 2s shows why:
+  //
+  //   Result=exit-code NRestarts=4 ActiveState=activating
+  //   Result=success   NRestarts=5 ActiveState=active        <- indistinguishable from healthy
+  //   Result=exit-code NRestarts=5 ActiveState=activating
+  //
+  // Both ActiveState and Result RESET during the up-phase. The only thing that survives
+  // the whole cycle is NRestarts CHANGING, which is a property of an interval, not of an
+  // instant. So the discriminator is the unit's own churn WITHIN this sweep — two samples
+  // the probe already takes for quiescence — and it needs no cross-sweep state.
+  //
+  // A verdict is emitted on EVERY path. Silence is how an invariant leaves the
+  // denominator while the report still looks complete.
+  const st = endState
   const before = prev.restarts?.['federation-transport-vessel.service']
-  const moved = before !== undefined && st.nRestarts !== before
+  const movedAcrossSweeps = before !== undefined && st.nRestarts !== before
   const crashed = st.result === 'exit-code' || st.result === 'signal' || st.result === 'core-dump'
-  const flapping = st.active === 'activating' && (crashed || moved)
+  const flapping = churnedInSweep || movedAcrossSweeps || (st.active === 'activating' && crashed)
 
   if (flapping) {
     record('I2_join_overlay', 'fail', {
@@ -299,11 +311,17 @@ function checkTransportUnit(prev: SweepState): { flapping: boolean; state: UnitS
         result: st.result,
         n_restarts: st.nRestarts,
         previous_n_restarts: before ?? null,
-        counter_changed_since_last_sweep: moved,
-        note: 'activating + Result=exit-code is terminal, not rolling; this unit never reports failed, and NRestarts resets under the start-limit window so a count threshold cannot see it',
+        churned_within_this_sweep: churnedInSweep,
+        counter_changed_since_last_sweep: movedAcrossSweeps,
+        note: 'restart churn observed across two in-sweep samples; this unit never reports failed, ActiveState and Result both reset during its up-phase, and NRestarts resets under the start-limit window — so only an interval measurement can see it',
       },
     })
-  } else if (st.active !== 'active') {
+  } else if (st.active === 'active' && !crashed) {
+    record('I2_join_overlay', 'pass', {
+      witness: 'static',
+      evidence: { active: st.active, result: st.result, n_restarts: st.nRestarts, note: 'stable across both in-sweep samples' },
+    })
+  } else {
     record('I2_join_overlay', 'undecidable', {
       witness: 'static',
       reason: 'unit_rolling',
@@ -740,7 +758,8 @@ async function main() {
   // Static-structural legs — these land with the overlay dark.
   checkHardcodedPeerEndpoint()
   checkAnchorPrecedence()
-  checkTransportUnit(prev)
+  // checkTransportUnit runs at the END of the sweep — it needs the interval, not an
+  // instant (see the note in that function).
   const { relays } = await checkBootstrapAnchors()
   const { circuitBearing } = await checkForeignVantageReachability()
 
@@ -778,13 +797,30 @@ async function main() {
 
   // Roster snapshot #2 — quiescence by MainPID/NRestarts movement, the same discipline
   // vessel-ctl restart uses, and for the same reason: is-active lies during a cutover.
-  let churned: string[] = []
+  const churned: string[] = []
+  const rosterAfter = new Map<string, UnitState>()
   for (const u of allUnits) {
     const b = rosterBefore.get(u)!
     const a = unitState(u)
+    rosterAfter.set(u, a)
     if (b.mainPid !== a.mainPid || b.nRestarts !== a.nRestarts) churned.push(u)
   }
-  const quiescent = churned.length === 0
+
+  const TRANSPORT = 'federation-transport-vessel.service'
+  const { flapping: transportFlapping } = checkTransportUnit(
+    prev,
+    rosterAfter.get(TRANSPORT) ?? unitState(TRANSPORT),
+    churned.includes(TRANSPORT),
+  )
+
+  // QUIESCENCE EXCLUDES UNITS ALREADY JUDGED TERMINALLY BROKEN. A unit in a permanent
+  // crash loop churns on every sweep, so counting it would make every sweep
+  // non-quiescent, and the hysteresis gate would then never let its OWN gap mint. The
+  // worst failure on the box would be the one thing that could never be filed — the
+  // failure suppressing the report about itself. Churn from a unit under a terminal
+  // verdict is a known condition, not an in-flight cutover.
+  const churnedExcludingTerminal = churned.filter((u) => !(u === TRANSPORT && transportFlapping))
+  const quiescent = churnedExcludingTerminal.length === 0
 
   // ── Report ────────────────────────────────────────────────────────────────────────
   const real = verdicts.filter((v) => v.invariant !== 'NC7_self_witness')
