@@ -662,16 +662,24 @@ async function negativeControls(probe: VesselLibp2p | null): Promise<Record<stri
     nc.NC3 = r.ok ? 'fired' : 'DID_NOT_FIRE'
   } catch { nc.NC3 = 'DID_NOT_FIRE' }
 
-  // NC4 — the path discriminator must not be a constant. Assert both polarities against
-  // a connection whose limited-ness we read directly.
+  // NC4 — the path discriminator must not be a constant. It has to be shown reading
+  // DIFFERENT values off different connections, which means observing both polarities:
+  // the connection to the relay itself is direct (limits == null) while a circuit
+  // connection through it is limited (limits != null).
+  //
+  // The first version of this control asserted `actual === !actual`, which is false for
+  // every input — a control that reports `fired` whenever any connection exists, proving
+  // nothing about whether `limited` is read correctly. It never lied only because it had
+  // never yet had a connection to look at. Observing ONE polarity is `partial`, not
+  // `fired`: a constant-true and a genuine read are indistinguishable from one sample.
   if (!probe) nc.NC4 = 'skipped_no_node'
   else {
-    const conns = probe.node.getConnections()
-    if (conns.length === 0) nc.NC4 = 'skipped_no_connection'
-    else {
-      const actual = (conns[0] as any).limits != null
-      nc.NC4 = actual === !actual ? 'DID_NOT_FIRE' : 'fired'
-    }
+    const flags = probe.node.getConnections().map((c: any) => c.limits != null)
+    const sawLimited = flags.some((f) => f)
+    const sawDirect = flags.some((f) => !f)
+    nc.NC4 = flags.length === 0 ? 'skipped_no_connection'
+      : sawLimited && sawDirect ? 'fired'
+      : `partial_one_polarity_only(${sawLimited ? 'limited' : 'direct'})`
   }
 
   // NC5 — freshness, not presence. A row past its TTL must not read as live. The 5-min
@@ -822,7 +830,54 @@ async function main() {
     ts: Date.now(),
   }
 
-  // ── Emit over loopback. The channel and its subject share no medium. ───────────────
+  // ── Gap emission — the loop from "oracle observes" to "substrate repairs itself" ────
+  //
+  // Only after 2 consecutive QUIESCENT sweeps of the same class (see the hysteresis
+  // above), so a self-edit cutover can never mint one. Ids are STABLE and derived
+  // (`fed:<class>`) so a re-fire UPDATES the existing row rather than flooding the store —
+  // an oracle on a rhythm cadence is a gap firehose otherwise.
+  //
+  // The closure predicate is carried in `summary`. substrateGap_write accepts no
+  // top-level falsifier field and overwrites classification_metadata.falsifier with a
+  // class label, so summary is the only field in which a filer's predicate survives.
+  const FALSIFIERS: Record<string, string> = {
+    hardcoded_peer_endpoint_in_image: 'no shipped unit or drop-in sets a routing endpoint containing a literal IP, and `systemctl show discovery-vessel -p Environment` contains no IP literal.',
+    bootstrap_env_precedence_inversion: 'no routing anchor (HUB_DISCOVERY_URL, DISCOVERY_ENDPOINT, IDENTITY_VESSEL_URL, ACTIVITY_API_ENDPOINT) differs between /workspace/.substrate-secrets and /etc/substrate/env.',
+    transport_unit_flapping: 'federation-transport-vessel.service reports ActiveState=active with Result=success for a full sweep interval.',
+    join_door_host_dependent: 'GET /bootstrap returns a non-empty discovery_endpoint and a non-loopback identity_endpoint when queried under a foreign Host header.',
+    no_relay_anchor: 'GET /bootstrap returns a non-empty relay_multiaddrs, OR the transport holds a reservation with no relay anchor configured (direct-only overlay is a valid answer).',
+    no_circuit_advertised: 'at least one vesselRegistry row carries a non-empty libp2p_multiaddr with a fresh lastSeen.',
+    overlay_unjoinable: 'this probe, holding a nonce identity and no prior state, obtains a relay reservation or a direct dial to the local transport within one sweep.',
+    relay_address_not_honoured: 'a dial to a /p2p-circuit multiaddr yields a connection with limits != null.',
+    punchthrough_unavailable: 'a dial by bare PeerId yields a connection with limits == null (DCUtR upgraded), or the relay-fallback is recorded as an accepted deployment condition.',
+    payload_corrupted: 'every payload class round-trips with matching byte-length and matching sha256 against both the echoed bytes and the server-computed hash.',
+    federation_ingress_unauthenticated: 'an uncredentialed overlay dial resolving vesselRegistry is refused or returns no rows.',
+    leave_only_at_ttl: 'after DELETE /vessels/<id>, an immediate re-query returns zero rows — i.e. the row cleared on the deregister path, not on the 5-minute TTL.',
+    join_not_findable: 'a freshly registered nonce shape is returned by a vesselCapability query immediately after registration.',
+  }
+  const emittedGaps: string[] = []
+  for (const cls of gapEligible) {
+    const rows = real.filter((r) => r.class === cls)
+    const ev = rows.map((r) => `${r.invariant}: ${JSON.stringify(r.evidence)}`).join(' || ')
+    const falsifier = FALSIFIERS[cls] ?? `the ${cls} verdict reports pass for 2 consecutive quiescent sweeps.`
+    const summary =
+      `FALSIFIER (closure predicate — carried here because substrateGap_write discards a free-text falsifier): ${falsifier}` +
+      ` || DETECTED BY: federation-probe-tick, an independent ephemeral-peer oracle; witnessed by ${rows.map((r) => r.witness).join('/')} , never by the transport's own health report.` +
+      ` || CONFIRMED OVER ${failing[cls]} consecutive QUIESCENT sweeps (no unit changed MainPID or NRestarts during them), so this is not a cutover artefact.` +
+      ` || EVIDENCE (${SWEEP_ID}): ${ev}` +
+      ` || CONTEXT: part of the federation overlay break tracked as host-independent-federation-join-broken and specified in openspec/changes/2026-09-12-host-independent-federation-join/proposal.md. This row is the re-measured, self-detected form — it closes when the probe says so, not when someone says it landed.`
+    try {
+      await post(`${DEV_VESSEL}/v2/impulses/resolve`, {
+        impulse: { pointer: { type: 'substrateGap_write', id: `fed:${cls}`, category: 'architecture', source: 'substrate_detected', status: 'open', summary } },
+      }, 6000)
+      emittedGaps.push(`fed:${cls}`)
+    } catch { /* a gap that failed to file must not abort the sweep */ }
+  }
+  ;(report as Record<string, unknown>).gaps_emitted = emittedGaps
+
+  // ── Emit over loopback. The channel and its subject share no medium, which is what
+  // lets this report "the overlay is down" at all. Emitted AFTER gap filing so the report
+  // carries what was actually filed rather than what was intended.
   for (const v of real) {
     await post(`${DEV_VESSEL}/v2/impulses/resolve`, {
       impulse: { type: 'poolImpulse_write', id: `fedverdict:${SWEEP_ID}:${v.invariant}:${v.config_class.payload ?? v.config_class.path ?? v.config_class.topology ?? 'base'}`, shape: 'federationProbeVerdict', source: 'federation-probe-tick', body: v },
