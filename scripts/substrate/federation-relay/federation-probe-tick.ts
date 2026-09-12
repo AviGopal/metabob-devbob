@@ -917,7 +917,8 @@ async function main() {
   // checkTransportUnit runs at the END of the sweep — it needs the interval, not an
   // instant (see the note in that function).
   const { relays } = await checkBootstrapAnchors()
-  const { circuitBearing } = await checkForeignVantageReachability()
+  const { vessels: registryRows, circuitBearing } = await checkForeignVantageReachability()
+  const ownRowsNow = checkChurnDurability(prev, registryRows)
 
   // The probe's own node. Without a relay anchor it still gets TCP listeners and DCUtR,
   // so direct-path legs remain meaningful on a LAN or a single host.
