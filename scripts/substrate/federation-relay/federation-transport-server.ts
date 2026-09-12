@@ -46,20 +46,58 @@ const HEALTH_PORT = parseInt(process.env.FED_HEALTH_PORT || '8401', 10)
 // (law 1 — read the relay at use time, never freeze a stale multiaddr in env).
 // Prefer the hub discovery (a spoke's pointer); fall back to local discovery.
 const BOOTSTRAP_URL = (process.env.BOOTSTRAP_URL || process.env.HUB_DISCOVERY_URL || DISCOVERY).replace(/\/$/, '')
-if (!RELAY && BOOTSTRAP_URL) {
-  try {
-    const r = await fetch(`${BOOTSTRAP_URL}/bootstrap`, { signal: AbortSignal.timeout(5000) })
-    if (r.ok) {
-      const b = await r.json() as { relay_multiaddrs?: string[] }
-      if (b.relay_multiaddrs?.length) {
-        RELAY = b.relay_multiaddrs[0]!
-        console.log(`[fed-transport] relay from ${BOOTSTRAP_URL}/bootstrap: ${RELAY}`)
-      }
-    }
-  } catch (e) { console.error(`[fed-transport] bootstrap fetch failed: ${(e as Error).message}`) }
-}
+const LOCAL_BOOTSTRAP_URL = DISCOVERY.replace(/\/$/, '')
 
-if (!RELAY) { console.error('[fed-transport] ERROR: set RELAY_MULTIADDR or point BOOTSTRAP_URL/HUB_DISCOVERY_URL at a discovery serving /bootstrap'); process.exit(1) }
+// Anchor lookup is ADVISORY, never fatal, and never one-shot.
+//
+// It has to be re-runnable because /bootstrap DERIVES relay_multiaddrs from the circuits
+// currently registered in that discovery — so the answer is empty until some transport in
+// the network holds a reservation, and becomes non-empty later, with no notification. A
+// single startup fetch can only ever see the bootstrap moment.
+async function fetchAnchor(url: string): Promise<string> {
+  if (!url) return ''
+  try {
+    const r = await fetch(`${url}/bootstrap`, { signal: AbortSignal.timeout(5000) })
+    if (!r.ok) return ''
+    const b = await r.json() as { relay_multiaddrs?: string[] }
+    const ma = b.relay_multiaddrs?.find((m) => typeof m === 'string' && m) ?? ''
+    if (ma) console.log(`[fed-transport] relay from ${url}/bootstrap: ${ma}`)
+    return ma
+  } catch (e) {
+    // An unreachable pointer is a HINT that missed, not an error condition. Observed
+    // 2026-09-12: a stale droplet IP pinned in a host workspace file (HTTP 000) timed out
+    // here, and the exit below then deleted this substrate's entire libp2p presence — 13
+    // of 13 registry rows with libp2p_multiaddr:null, a unit parked in `activating`
+    // forever (Restart=always ⇒ never `failed`, so nothing reported it). An address
+    // someone typed once must never be able to kill the node (law 11).
+    console.error(`[fed-transport] bootstrap fetch failed (${url}): ${(e as Error).message}`)
+    return ''
+  }
+}
+// Prefer the pointed-at (hub) discovery; fall back to LOCAL discovery. The comment above
+// has claimed this fallback since the file was written — the code never had it, so a dead
+// hub pointer skipped the healthy local /bootstrap answering in 0.7ms in the same container.
+async function resolveAnchor(): Promise<string> {
+  return (await fetchAnchor(BOOTSTRAP_URL)) || (BOOTSTRAP_URL === LOCAL_BOOTSTRAP_URL ? '' : await fetchAnchor(LOCAL_BOOTSTRAP_URL))
+}
+if (!RELAY) RELAY = await resolveAnchor()
+
+// A RELAY-LESS TRANSPORT IS A HEALTHY TRANSPORT (operator-ratified 2026-07-19:
+// "the relay won't always be available due to networking conditions, so internally a
+// direct connection should be equivalent to a punchthrough").
+//
+// This used to be `process.exit(1)`, and that single line made the overlay bootstrap
+// CIRCULAR: discovery derives relay_multiaddrs from registered circuits, circuits exist
+// only once a transport reserves, and the transport refused to start without an anchor —
+// so a standalone substrate (the default inventory) could never originate an overlay, and
+// every substrate whose anchor went stale went dark in the same way. Worse, the direct-dial
+// machinery this file already implements (currentDirectAddrs / advertisedAddrs, "direct ≡
+// punchthrough") was unreachable code: the process exited before the node was constructed.
+//
+// Relay-less we still get /ip4/0.0.0.0/tcp/<ephemeral>, dcutr and autonat — i.e. every
+// same-host / same-LAN peer is fully reachable, which is the ENTIRE reachability surface of
+// a single-host deployment. The relay is the NAT fallback rung, not the entry condition.
+if (!RELAY) console.warn('[fed-transport] no relay anchor yet — starting DIRECT-ONLY (direct ≡ punchthrough); an anchor is re-attempted on a backoff and adopted if one appears')
 
 // The libp2p keypair is derived deterministically from this id (seed =
 // sha256(id)), so it MUST be substrate-scoped: every substrate runs a transport
@@ -77,7 +115,22 @@ const LIBP2P_IDENTITY = `${VESSEL_ID}@${process.env.FED_SUBSTRATE_ID || hostname
 // a silently-dead connection. Without this service every relay→vessel ping fails as
 // "unsupported protocol" (not "dead"), so the responder must be live on every vessel
 // BEFORE the relay keep-alive is enabled.
-const vl: VesselLibp2p = await createVesselLibp2p({ vesselId: LIBP2P_IDENTITY, relayMultiaddr: RELAY, enableHttp: true, extraServices: { ping: ping() } })
+// `relayMultiaddr` is passed ONLY when we actually hold an anchor: createVesselLibp2p
+// branches on its presence (index.ts:257 pushes the generic '/p2p-circuit' listen addr,
+// :283 starts the reservation-refresh loop). Passing '' would be falsy-equivalent today but
+// the intent must be explicit — this is the switch between a relayed node and a direct-only
+// one, not an optional detail.
+const buildNode = (relay: string): Promise<VesselLibp2p> => createVesselLibp2p({
+  vesselId: LIBP2P_IDENTITY,
+  ...(relay ? { relayMultiaddr: relay } : {}),
+  enableHttp: true,
+  extraServices: { ping: ping() },
+})
+// `let`, not `const`: adopting a relay anchor discovered AFTER startup requires replacing
+// the node (see adoptAnchor() at the bottom — the '/p2p-circuit' listen address can only be
+// set at construction). Every consumer below reads this binding at call time, so the swap is
+// invisible to them; the peer id is unchanged because the key is derived from LIBP2P_IDENTITY.
+let vl: VesselLibp2p = await buildNode(RELAY)
 
 // Resolve handler (where the data lives). Probe shapes are answered inline; any OTHER
 // shape is proxied to the vessel that owns it on THIS substrate, found via the LOCAL
@@ -359,8 +412,13 @@ const currentCircuit = () => vl.advertiseMultiaddrs().find((m) => m.includes('p2
 const currentDirectAddrs = () => vl.advertiseMultiaddrs().filter((m) => !m.includes('p2p-circuit'))
 const advertisedAddrs = () => [currentCircuit(), ...currentDirectAddrs()].filter(Boolean)
 // Bounded startup wait so first registrations usually carry the circuit already.
-for (let i = 0; i < 40 && !currentCircuit(); i++) {
-  await new Promise((r) => setTimeout(r, 500))
+// Skipped entirely with no anchor: there is nothing to wait FOR, and spending 20s before
+// serving /health would make a perfectly healthy direct-only transport look slow to start
+// to the very self-recovery watchdog that probes it.
+if (RELAY) {
+  for (let i = 0; i < 40 && !currentCircuit(); i++) {
+    await new Promise((r) => setTimeout(r, 500))
+  }
 }
 const circuit = currentCircuit() // legacy snapshot for startup logging only
 
@@ -642,13 +700,44 @@ async function localVesselRows(): Promise<Array<{ vesselId: string; shapes: stri
 let noCircuitWarnedAt = 0
 const NO_CIRCUIT_WARN_WINDOW_MS = 600_000
 
+// CROSS-BOUNDARY DE-ADVERTISE. The mirror was register-only, so a local vessel that went
+// away kept its `<vessel>@<substrate>` row on the HUB until discovery's 5-min TTL expired
+// it. For up to five minutes every peer in the network saw a producer that no longer
+// exists, selected it (a mirror row advertises the shape and a live circuit, so it wins
+// against nothing), dialled our circuit, and got 'no local or remote producer' from
+// proxyToLocalOwner — a hollow reach attributed to the WRONG substrate. Withdrawal must
+// cross the boundary as explicitly as advertisement does.
+//
+// The set is what we ACTUALLY registered on the previous tick, not what we think we own:
+// diffing against a recomputed expectation would delete rows we never created (e.g. another
+// substrate's identically-named vessel) if the two ever disagreed.
+let mirroredVesselIds = new Set<string>()
+async function deadvertiseAtHub(gone: string[]): Promise<void> {
+  if (gone.length === 0) return
+  const results = await Promise.all(gone.map(async (id) => {
+    try {
+      const r = await fetch(`${HUB_DISCOVERY}/vessels/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { Authorization: 'ApiKey ' + HUB_API_KEY },
+        signal: AbortSignal.timeout(5000),
+      })
+      // 404 is SUCCESS for a withdrawal: the row is already gone (TTL beat us, or a
+      // previous tick's DELETE landed). Treating it as failure would log an error every
+      // tick for a state that is exactly what we asked for.
+      return `${id}:${r.status}`
+    } catch (e) { return `${id}:err:${String((e as Error)?.message ?? e)}` }
+  }))
+  const failed = results.filter((s) => !/:(200|202|204|404)$/.test(s))
+  console.log(`[fed-transport] hub-deadvertise (${results.length} rows) -> ${failed.length === 0 ? 'all ok' : 'FAILED ' + failed.join(', ')}`)
+}
+
 async function registerAtHub() {
   if (!HUB_DISCOVERY) return  // SELF_MIRROR (hub) now still runs: advertises hub-native vessels with the circuit for inbound peer dials (see per-vessel rows below; own anchor row skipped)
   const liveCircuit = currentCircuit()
   if (!liveCircuit) {
     if (Date.now() - noCircuitWarnedAt >= NO_CIRCUIT_WARN_WINDOW_MS) {
       noCircuitWarnedAt = Date.now()
-      console.error('[federation] no relay reservation — remote visibility suspended (hub mirror skipped; refreshes immediately on reacquisition)')
+      console.error(`[federation] ${RELAY ? 'no relay reservation' : 'no relay anchor (direct-only)'} — remote visibility suspended (hub mirror skipped; refreshes immediately on reacquisition)`)
     }
     return
   }
@@ -683,6 +772,23 @@ async function registerAtHub() {
     const failed = results.filter((s) => !/:(200|201)$/.test(s))
     console.log(`[fed-transport] hub-register per-vessel (${results.length} rows) -> ${failed.length === 0 ? 'all ok' : 'FAILED ' + failed.join(', ')}`)
     if (failed.some((s) => /:40[13]$/.test(s))) void emitJoinHealth('auth_rejected', 'hub /register FAILED ' + failed.join(', '))
+    // Withdraw what we advertised last tick and no longer advertise. Reached only AFTER
+    // both guards above, and that placement is the whole safety argument:
+    //   • no live circuit  -> early return. A dropped reservation is a US problem, not a
+    //     THEM problem: the vessels are all still there, we just can't be reached. Deleting
+    //     the fleet's hub rows on our own outage would turn a reachability blip into a
+    //     registry wipe that only a full re-register repairs.
+    //   • rows.length === 0 -> early return. The local registry repopulating (a discovery
+    //     restart empties an in-memory, 5-min-TTL registry) looks identical to "every
+    //     vessel left". The existing comment already chose to ride the hub TTL through it;
+    //     de-advertising there would amplify a local blip into a fleet-wide withdrawal.
+    // So a row is deleted only when we held a circuit, saw a NON-EMPTY local registry, and
+    // that vessel was absent from it — i.e. genuine departure, not instrument failure.
+    // SELF_MIRROR is respected implicitly: under it the anchor row is never registered, so
+    // it never enters the set and can never be deleted.
+    const currentIds = new Set(registrations.map((r) => r.vesselId))
+    await deadvertiseAtHub([...mirroredVesselIds].filter((id) => !currentIds.has(id)))
+    mirroredVesselIds = currentIds
   } catch (e) { console.log('[fed-transport] hub-register err', String(e)) }
 }
 
@@ -717,9 +823,15 @@ setInterval(() => {
 // reservation by CLOSE + RE-DIAL: reactively on circuit loss / observed NO_RESERVATION,
 // and proactively well inside the ~1h TTL, so the circuit never empties and hub egress
 // never sees NO_RESERVATION. Re-advertisement is handled by the transition watcher above.
-const RELAY_PEER = RELAY.match(/\/p2p\/([^/]+)/)?.[1] ?? ''
-const relayConnections = () =>
-  RELAY_PEER ? vl.node.getConnections().filter((c) => c.remotePeer.toString() === RELAY_PEER) : []
+// Derived at CALL time, not captured once: RELAY is mutable now (adoptAnchor may set it
+// long after startup), and a const snapshot taken while relay-less would stay '' forever —
+// the watchdog would then treat an adopted relay's connections as absent and redial in a
+// loop. Same class as the currentCircuit() capture defect documented above.
+const relayPeer = () => RELAY.match(/\/p2p\/([^/]+)/)?.[1] ?? ''
+const relayConnections = () => {
+  const p = relayPeer()
+  return p ? vl.node.getConnections().filter((c) => c.remotePeer.toString() === p) : []
+}
 let redialing = false
 let lastReserveAt = Date.now()
 let lastRedialAttemptAt = 0
@@ -729,6 +841,11 @@ let lastEgressNoResLogAt = 0
 let lastRedialReason = ''
 async function redialRelay(reason: string): Promise<void> {
   if (redialing) return
+  // No anchor ⇒ nothing to dial. Without this guard every caller below (the egress repair
+  // path, the phantom watchdog's `circuit empty` branch) would reach multiaddr('') and
+  // throw once per tick / per failing egress on a node that is working exactly as designed.
+  // Acquiring an anchor is adoptAnchor()'s job, not a re-dial's.
+  if (!RELAY) return
   // Reactive (egress-triggered) redials are rate-limited so a burst of failing egress
   // calls collapses into ONE teardown, never one per request: closing the relay
   // connection under concurrent traffic is what turned a single transient error into
@@ -768,6 +885,10 @@ async function redialRelay(reason: string): Promise<void> {
 // instead of never.
 let phantomStrikes = 0
 setInterval(() => {
+  // Direct-only is a healthy steady state, not a degraded one — there is no reservation to
+  // hold and no phantom to detect. Bail before the `circuit empty` branch so a relay-less
+  // node doesn't accumulate redial attempts against an anchor it does not have.
+  if (!RELAY) return
   const circuitUp = !!currentCircuit()
   const relayUp = relayConnections().length > 0
   if (!circuitUp || !relayUp) { phantomStrikes = 0; void redialRelay(!circuitUp ? 'circuit empty' : 'relay connection gone'); return }
@@ -787,4 +908,78 @@ setInterval(() => {
   // night). 5 min halves it; the idle-node worst case stays bounded (1 redial/10 min).
 }, 300_000) // 5 min
 
-console.log(`[fed-transport] up id=${VESSEL_ID} peer=${vl.peerId} health=:${HEALTH_PORT} circuit=${circuit || '(none yet)'} hub=${HUB_DISCOVERY || '(no hub mirror)'}`)
+// ── ANCHOR RE-ACQUISITION (relay-less → relayed, without a restart) ─────────────────
+// The bootstrap is circular by construction: /bootstrap derives relay_multiaddrs from the
+// circuits registered in that discovery, so the anchor a joining substrate needs does not
+// exist until some transport already holds a reservation. Startup therefore cannot be the
+// only chance to see one — a substrate that boots first (or boots while the hub is down)
+// must be able to JOIN LATER, on its own, with no operator and no unit restart.
+//
+// THE API LIMITATION, STATED HONESTLY. createVesselLibp2p only pushes the generic
+// '/p2p-circuit' listen address when relayMultiaddr is set (index.ts:257), and js-libp2p
+// exposes no supported way to add a listen address to a started node. The circuit-relay
+// transport makes reservations from its LISTENER, so simply dialling the relay on the
+// existing node would open a connection and obtain NO reservation — a silent half-join
+// (connected to the relay, unreachable through it) that looks fine in the connection table.
+// Adoption therefore REPLACES the node. That is cheap and safe here:
+//   • the peer id is derived from LIBP2P_IDENTITY, so it is byte-identical across the swap
+//     — every hub row, every cached circuit target, every isSelfCircuit() check still holds;
+//   • the direct listeners are ephemeral ports (localTcpPort unset ⇒ :0), so the new node
+//     cannot collide with the old one, and the 120s re-register republishes the new addrs;
+//   • Bun.serve() and the HTTP surface are untouched — /health and /egress/resolve never
+//     stop answering.
+// The new node is built and its handlers registered BEFORE the old one is stopped, so a
+// construction failure leaves the working direct-only node in place and we simply retry.
+// In-flight resolves on the old node are lost at the swap; that is one bounded blip against
+// a substrate that would otherwise stay relay-less until a human noticed.
+let adopting = false
+async function adoptAnchor(anchor: string): Promise<void> {
+  if (adopting || !anchor) return
+  adopting = true
+  const previous = vl
+  try {
+    console.log(`[fed-transport] relay anchor acquired (${anchor}) — rebuilding the libp2p node to adopt it (listen addrs are construction-time)`)
+    const next = await buildNode(anchor)
+    await serveResolve(next, resolveHandler)
+    await serveResolveHttp(next, resolveHandler)
+    RELAY = anchor        // must land before the swap: relayPeer()/redialRelay() read it
+    vl = next
+    await previous.stop().catch(() => {})
+    // NOT re-registering here on purpose. The reservation lands asynchronously after the
+    // dial, so registering now would advertise a node with no circuit yet. The existing
+    // reservation-transition watcher polls currentCircuit() every 5s and fires register() +
+    // registerAtHub() the moment empty → non-empty — the same path a reacquisition after a
+    // relay bounce takes. One acquisition path, one refresh, no duplicate.
+  } catch (e) {
+    console.error(`[fed-transport] relay adoption failed (staying direct-only, will retry): ${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    adopting = false
+  }
+}
+// Backoff, not a fixed interval: while no anchor exists anywhere in the network this poll
+// is pure futile traffic against discovery, and a hot 5s loop against a dead pinned host
+// (each attempt costing a 5s timeout) is the storm class this file already fights on the
+// egress path. Start at 15s, double to a 10-minute ceiling, reset on adoption.
+const ANCHOR_POLL_MIN_MS = 15_000
+const ANCHOR_POLL_MAX_MS = 600_000
+let anchorPollMs = ANCHOR_POLL_MIN_MS
+const pollForAnchor = async () => {
+  if (!RELAY) {
+    const anchor = await resolveAnchor()
+    if (anchor) {
+      await adoptAnchor(anchor)
+      if (RELAY) anchorPollMs = ANCHOR_POLL_MIN_MS
+    } else {
+      anchorPollMs = Math.min(anchorPollMs * 2, ANCHOR_POLL_MAX_MS)
+    }
+  }
+  // Keep the timer alive even once relayed: a relay we adopted can go away (the anchor is
+  // a hint checked at use time, law 1), and if a future path ever clears RELAY the poller
+  // is already running. Self-rescheduling rather than setInterval so the backoff is real —
+  // setInterval cannot change its own period, and the previous generation of this file's
+  // watchdogs learned that a fixed period is a floor on recovery latency, not a budget.
+  setTimeout(() => void pollForAnchor(), RELAY ? ANCHOR_POLL_MAX_MS : anchorPollMs)
+}
+setTimeout(() => void pollForAnchor(), anchorPollMs)
+
+console.log(`[fed-transport] up id=${VESSEL_ID} peer=${vl.peerId} health=:${HEALTH_PORT} circuit=${circuit || (RELAY ? '(none yet)' : '(direct-only, no relay anchor)')} hub=${HUB_DISCOVERY || '(no hub mirror)'}`)

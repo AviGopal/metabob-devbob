@@ -1000,11 +1000,43 @@ SECRETS
 if [[ -f /workspace/.substrate-secrets ]]; then
   _known="$(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$_SECRETS_TMP" | tr -d '=' || true)"
   _carried=0
+  _dropped=0
   while IFS= read -r _line; do
     case "$_line" in ''|'#'*) continue ;; esac
     _k="${_line%%=*}"
     [[ "$_k" == "$_line" ]] && continue                       # no '=' — not a field
     [[ ! "$_k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && continue     # not a shell-safe name
+    # ROUTING ANCHORS ARE NEVER PERSISTED, AND NEVER CARRIED FORWARD.
+    #
+    # These name WHERE THIS SUBSTRATE IS POINTED RIGHT NOW. They are not secrets,
+    # they are re-derived from scratch every boot (see the spoke derivation and
+    # the /etc/substrate/env heredoc above), and freezing one into a host file
+    # turns a moved hub into a permanent outage. This is not hypothetical: an
+    # older revision of the heredoc emitted HUB_DISCOVERY_URL, the name then left
+    # the list, and the carry-through below dutifully preserved it — so
+    # HUB_DISCOVERY_URL=http://138.197.116.56:18100 (a decommissioned droplet)
+    # survived every gen-env run, outranked the empty value in /etc/substrate/env
+    # because the unit loaded .substrate-secrets last, and kept
+    # federation-transport-vessel hard-exiting "no relay anchor" forever.
+    #
+    # The carry-through exists so a secret written by a DIFFERENT revision of the
+    # list survives. An anchor is the opposite case: a stale one must die. Drop
+    # it loudly, here, where the drop is observable in the boot journal.
+    #
+    # Every historical alias is listed, because the env heredoc sets them all to
+    # the same value and any single survivor re-pins the concept.
+    # PEER_DISCOVERY_ENDPOINTS is deliberately NOT here — it is an operator-
+    # explicit pin that this revision emits and owns.
+    case "$_k" in
+      HUB_DISCOVERY_URL|DISCOVERY_ENDPOINT|DISCOVERY_VESSEL_ENDPOINT|\
+      IDENTITY_VESSEL_URL|IDENTITY_ENDPOINT|\
+      ACTIVITY_API_ENDPOINT|ACTIVITY_API_URL|PRODUCER_DISCOVERY_ENDPOINT|\
+      METABOB_ENDPOINT|RELAY_MULTIADDR)
+        _dropped=$((_dropped + 1))
+        echo "[gen-env] dropped stale routing anchor from persisted secrets: $_k (anchors are re-derived each boot, never persisted)" >&2
+        continue
+        ;;
+    esac
     if ! printf '%s\n' "$_known" | grep -qx "$_k"; then
       printf '%s\n' "$_line" >> "$_SECRETS_TMP"
       _carried=$((_carried + 1))
@@ -1016,6 +1048,7 @@ if [[ -f /workspace/.substrate-secrets ]]; then
   cp -p /workspace/.substrate-secrets /workspace/.substrate-secrets.prev 2>/dev/null || true
   chmod 600 /workspace/.substrate-secrets.prev 2>/dev/null || true
   [[ "$_carried" -gt 0 ]] && echo "[gen-env] merged $_carried secret(s) this revision does not emit" >&2
+  [[ "$_dropped" -gt 0 ]] && echo "[gen-env] dropped $_dropped persisted routing anchor(s); the copy kept in .substrate-secrets.prev is the only record" >&2
 fi
 
 # Install atomically, so an interrupted write cannot leave a truncated file that

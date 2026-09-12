@@ -9,12 +9,15 @@
  * Meanwhile validator-liveness files a recurring validator-cadence-severed gap that
  * nothing can service while the conductor has nothing to make due.
  *
- * THIS IS RESTORATION, NOT NEW POLICY. Every body below is recovered VERBATIM from the
- * pre-outage pool snapshot (/workspace/pool/standing.json, 2026-09-07T04:33Z) — the same
- * families, budgets, credit and staleness that were already approved and running. No
- * budget was invented here. In this scheduler budget is COST
- * (due = credit_mean * staleness / budget; affordable iff budget <= 1 - load/3), so a
- * fabricated budget would silently re-prioritise the whole fleet.
+ * THIS IS RESTORATION, NOT NEW POLICY — EXCEPT WHERE AN ENTRY IS EXPLICITLY FLAGGED
+ * "NEW POLICY" IN A COMMENT ON THE ENTRY ITSELF. Every unflagged body below is recovered
+ * VERBATIM from the pre-outage pool snapshot (/workspace/pool/standing.json,
+ * 2026-09-07T04:33Z) — the same families, budgets, credit and staleness that were already
+ * approved and running. No budget was invented in the restored set. In this scheduler
+ * budget is COST (due = credit_mean * staleness / budget; affordable iff
+ * budget <= 1 - load/3), so a fabricated budget would silently re-prioritise the whole
+ * fleet — which is exactly why a newly-authored budget must be flagged rather than
+ * smuggled in under the restoration claim. Flagged entries state their own rationale.
  *
  * IDEMPOTENT BY CONSTRUCTION. It reads the registry through the CONDUCTOR OWN read path
  * and writes nothing if any rhythm already exists, so it is safe on every tick and cannot
@@ -191,6 +194,47 @@ const SEED = {
         "staleness": 0.0663229265028414,
         "paces": "self-validation cycle"
       }
+    },
+    // ───────────────────────────────────────────────────────────────────────────────
+    // NEW POLICY, NOT RESTORATION. This family did not exist before the outage and is
+    // NOT in the 2026-09-07 snapshot. Every number below was AUTHORED (2026-09-12), not
+    // recovered — the file's restoration claim above does not cover it, which is why it
+    // carries this flag.
+    //
+    // WHY 0.12 — budget is COST, not allowance. due = credit_mean * staleness /
+    // max(budget, 0.05), and a family is affordable only while budget <= 1 - load/3. So a
+    // cheap family comes due often AND survives load; an expensive one is priced out
+    // first when the substrate is busy. Federation verification that gets priced out
+    // exactly when the substrate is churning would be useless, because CHURN IS WHEN
+    // FEDERATION BREAKS — vessels restart, get masked, lose their relay reservation, and
+    // the overlay goes dark precisely during self-edit. 0.12 is the cheapest budget in
+    // the registry (below reality-modeling's 0.15) and stays affordable through load
+    // bucket 2, so the oracle keeps sweeping through the churn it exists to observe.
+    //
+    // alpha/beta 1/1 is an UNINFORMED prior — no credit history is fabricated for a
+    // family that has never run. staleness 1.0 means "never verified", so the first
+    // conductor tick after mount scores it due (0.5 * 1.0 / 0.12 ≈ 4.2 vs threshold 1.0)
+    // and it decays from there like every other family.
+    //
+    // axis is freshness, NOT presence: the conductor gates presence-axis rhythms on an
+    // Obsidian surface being discoverable, which would silently freeze federation
+    // verification whenever no human is connected — the opposite of what an autonomous
+    // oracle needs.
+    {
+      "id": "rhythm-federation-verification",
+      "shape": "timeShapedRhythm",
+      "body": {
+        "axis": "freshness",
+        "axis_code": 2,
+        "family": "federation-verification",
+        "budget": 0.12,
+        "alpha": 1,
+        "beta": 1,
+        "staleness": 1,
+        "transient": false,
+        "paces": "federation overlay probe sweep from a foreign vantage",
+        "description": "Dial the federation overlay from an ephemeral nonce-identity libp2p peer and grade join/find/route/leave/payload invariants against the live roster. Cheapest budget in the registry on purpose: verification must stay affordable during churn, because churn is when federation breaks."
+      }
     }
   ],
   "familyGoals": [
@@ -208,6 +252,19 @@ const SEED = {
       "body": {
         "family": "validation",
         "goal": "run validation-goal-synth then validation-dispatch-tick then validation-grade-tick for the least-recently-validated promoted template"
+      }
+    },
+    // NEW POLICY, NOT RESTORATION (2026-09-12) — see the rhythm entry above. This
+    // mapping is LOAD-BEARING: federation-verification has no entry in the conductor's
+    // bootstrap FAMILY_GOALS const, and the conductor merges pool goals OVER that const,
+    // so without this row the family scores due every tick and is then skipped
+    // no_goal_mapping forever — due but unmappable, which reads as silence.
+    {
+      "id": "rhythm-family-goal-federation-verification",
+      "shape": "rhythmFamilyGoal",
+      "body": {
+        "family": "federation-verification",
+        "goal": "Run one federation verification sweep: execute the federation probe script at scripts/substrate/federation-relay/federation-probe-tick.ts inside the substrate container, with the substrate environment loaded, so an ephemeral libp2p peer dials the overlay from outside and grades the federation invariants. Then confirm that this sweep's federationVerificationReport was recorded, and report its coverage fraction, its blocking reason, and which invariants failed."
       }
     }
   ]
