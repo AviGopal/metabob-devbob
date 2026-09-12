@@ -409,9 +409,24 @@ async function checkForeignVantageReachability() {
       },
     })
   } else {
+    // SCOPE OF THIS PASS, stated so it cannot be over-read. The probe runs INSIDE the
+    // container, so it shares a network namespace with the transport and its "foreign
+    // vantage" is foreign in peer identity but not in location. A row advertising only
+    // 127.0.0.1 and a docker-internal 172.17.x address satisfies this predicate here and
+    // would be unreachable from a genuinely foreign substrate. The invariant's name is
+    // stronger than what a single-substrate sweep can decide; the honest scope travels
+    // with the verdict rather than living in a comment nobody reads next to the number.
+    const addrs = circuitBearing.flatMap((v: any) => (v.libp2p_multiaddr ?? []) as string[])
+    const routableOffHost = addrs.some((m) => !/\/ip4\/(127\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[01]\.|10\.|192\.168\.)/.test(m))
     record('I1_foreign_vantage_reachable', 'pass', {
       witness: 'probe',
-      evidence: { registered: vessels.length, with_circuit: circuitBearing.length },
+      evidence: {
+        registered: vessels.length,
+        with_circuit: circuitBearing.length,
+        witness_scope: 'same-network-namespace (probe runs in-container): proves peer-identity separation, NOT off-host reachability',
+        advertises_off_host_routable_addr: routableOffHost,
+        note: routableOffHost ? undefined : 'every advertised address is loopback or RFC1918 — a genuinely foreign substrate could not dial this. Cross-vantage confirmation is required before reading this as federation working.',
+      },
     })
   }
   return { vessels, circuitBearing }
@@ -507,9 +522,22 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
       evidence: { peer_id: hintPeer, note: 'transport self-report accepted as an address hint, never as reachability' },
     })
   } catch {
-    record('I2_join_overlay', 'fail', {
-      witness: 'probe', cls: 'overlay_unjoinable',
-      evidence: { note: `transport health at ${FED_HEALTH} did not answer — there is no libp2p node on this substrate` },
+    // NOT a reachability verdict. This catch used to record
+    // `I2_join_overlay fail [overlay_unjoinable]`, making the FAIL and the I10 row the two
+    // branches of ONE try/catch around a plain LOOPBACK HTTP fetch to :8401/health. The
+    // consequence, caught by adversarial review: when the transport's HTTP health started
+    // answering, the overlay_unjoinable FAIL silently VANISHED from the decided set — and
+    // its own closure predicate was still unmet (0 reservations, I5 dial_failed). It even
+    // dropped out of gap_eligible, stranding the filed gap with no path to re-fire or
+    // close. Coverage stayed at exactly 60% only because the I10 row substituted 1-for-1
+    // for the vanished FAIL, hiding the loss.
+    //
+    // An HTTP health endpoint answering says nothing about whether the OVERLAY is
+    // joinable. Overlay joinability is decided below, from the probe's own reservation and
+    // dial outcomes, and nowhere else.
+    record('I10_non_transport_witness', 'undecidable', {
+      witness: 'probe', reason: 'no_address_hint',
+      evidence: { note: `transport health at ${FED_HEALTH} did not answer — no address hint available; this is NOT itself an overlay verdict` },
     })
   }
 
@@ -598,10 +626,32 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
           evidence: { rows_returned: got.length, note: 'an uncredentialed peer read the registry over the overlay' },
         })
       } else {
-        record('I9_ingress_authenticated', 'pass', { witness: 'probe', evidence: { note: 'uncredentialed overlay resolve returned nothing' } })
+        record('I9_ingress_authenticated', 'pass', { witness: 'probe', evidence: { note: 'uncredentialed overlay resolve reached the ingress and returned nothing' } })
       }
-    } catch {
-      record('I9_ingress_authenticated', 'pass', { witness: 'probe', evidence: { note: 'uncredentialed overlay resolve refused' } })
+    } catch (e) {
+      // A THROWN DIAL IS NOT A REFUSAL. This catch used to grade every throw as
+      // 'pass — uncredentialed overlay resolve refused', which reported a SECURITY
+      // invariant as satisfied on a connection that was never established. Caught by
+      // adversarial review: the throw was `The dial request has no valid addresses for
+      // peer` — a client-side addressing failure in which the ingress was never contacted
+      // at all. "We could not reach you" is not "you turned us away", and grading it as a
+      // pass is how an unauthenticated ingress gets certified as authenticated.
+      //
+      // Only a transport-level rejection AFTER a connection counts. Anything that smells
+      // like an addressing/dial/timeout failure is undecidable — we learned nothing.
+      const msg = String((e as Error)?.message ?? e)
+      const neverConnected = /no valid addresses|dial request|ECONNREFUSED|ETIMEDOUT|timed out|unsupported protocol|no reservation|NO_RESERVATION|cannot dial|not dialable/i.test(msg)
+      if (neverConnected) {
+        record('I9_ingress_authenticated', 'undecidable', {
+          witness: 'probe', reason: 'ingress_never_contacted',
+          evidence: { error: msg, note: 'the dial failed before reaching the ingress — this says nothing about whether the ingress authenticates' },
+        })
+      } else {
+        record('I9_ingress_authenticated', 'pass', {
+          witness: 'probe',
+          evidence: { error: msg, note: 'the ingress was reached and rejected the uncredentialed resolve' },
+        })
+      }
     }
   }
 }
@@ -828,7 +878,15 @@ async function main() {
   const failed = real.filter((v) => v.verdict === 'fail').length
   const undecided = real.filter((v) => v.verdict === 'undecidable').length
   const decided = passed + failed
+  // A CONTROL THAT NEVER RAN IS NOT A CONTROL THAT PASSED. The validity rule used to flag
+  // only strings beginning 'DID_NOT_FIRE', so `skipped_*` and `partial_*` counted as
+  // valid — and NC4, the control whose entire job is proving the relay/direct
+  // discriminator is not a constant, reported `skipped_no_connection` on every sweep of
+  // this workflow while the report read `sweep_validity: valid`. Every "valid" sweep had
+  // its path-discriminator control inert. Not-fired is now visible in the verdict:
+  // `invalid` when a control actively failed, `degraded` when one could not run.
   const ncFailed = Object.entries(nc).filter(([, v]) => v.startsWith('DID_NOT_FIRE')).map(([k]) => k)
+  const ncInert = Object.entries(nc).filter(([, v]) => v.startsWith('skipped') || v.startsWith('partial')).map(([k]) => k)
 
   const blocking = relays.length === 0 ? 'no_relay_anchor'
     : !probe ? 'no_probe_node'
@@ -848,6 +906,19 @@ async function main() {
   }
   const gapEligible = Object.entries(failing).filter(([, n]) => n >= 2).map(([c]) => c)
 
+  // A CLASS THAT STOPS BEING REPORTED IS NOT A CLASS THAT WAS FIXED, and the difference
+  // must be visible in the report rather than inferred from a shrinking list. Adversarial
+  // review found `overlay_unjoinable` present in one sweep and absent from the next three
+  // — not flipped to pass, just gone, with its filed gap left open and unreachable by
+  // either a re-fire or a close. The dropped-from-gap_eligible count (7 -> 4) was the only
+  // trace, and nothing named which class had gone or why.
+  //
+  // This does not guess whether the disappearance is a fix or a regression in the
+  // instrument — it names it so a reader can ask. A class here with its gap still open is
+  // the signature of the instrument having stopped looking.
+  const reportedClasses = new Set(real.filter((r) => r.class).map((r) => r.class!))
+  const noLongerReported = Object.keys(prev.failing ?? {}).filter((c) => !reportedClasses.has(c))
+
   const report = {
     sweep_id: SWEEP_ID, probe_id: PROBE_ID, substrate: SUBSTRATE_ID,
     planned: real.length, attempted: real.length, decided,
@@ -859,9 +930,12 @@ async function main() {
     masked_by_selection: masked, selection_in_force: selection || '(none set)',
     consecutive_failing_sweeps: failing,
     gap_eligible_classes: gapEligible,
+    classes_no_longer_reported: noLongerReported,
     negative_controls: nc,
     // An all-green sweep whose controls did not fire is INVALID, not passing.
-    sweep_validity: ncFailed.length === 0 ? 'valid' : `invalid(controls_did_not_fire:${ncFailed.join(',')})`,
+    sweep_validity: ncFailed.length > 0 ? `invalid(controls_did_not_fire:${ncFailed.join(',')})`
+      : ncInert.length > 0 ? `degraded(controls_inert:${ncInert.join(',')})`
+      : 'valid',
     duration_ms: Date.now() - SWEEP_START,
     ts: Date.now(),
   }
@@ -954,6 +1028,7 @@ async function main() {
     console.log(`  quiescent: ${quiescent}${churned.length ? ` (churned: ${churned.join(', ')})` : ''}`)
     console.log(`  negative_controls: ${JSON.stringify(nc)}`)
     console.log(`  sweep_validity: ${report.sweep_validity}`)
+    if (noLongerReported.length) console.log(`  ⚠ classes_no_longer_reported (was failing, emitted no verdict this sweep): ${noLongerReported.join(', ')}`)
     console.log(`  gap_eligible (>=2 consecutive quiescent sweeps): ${gapEligible.length ? gapEligible.join(', ') : 'none yet'}\n`)
   }
 }
