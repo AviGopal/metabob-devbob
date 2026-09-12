@@ -189,6 +189,7 @@ interface SweepState {
   restarts?: Record<string, number>
   failing?: Record<string, number> // class -> consecutive QUIESCENT sweeps failing
   clearing?: Record<string, number> // class -> consecutive SOUND sweeps proven clear (closure hysteresis)
+  closed?: string[] // classes already written closed, so a close is reported once per transition
 }
 function readState(): SweepState {
   try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')) as SweepState } catch { return {} }
@@ -1143,8 +1144,14 @@ async function main() {
   // Close what has been proven clear for two consecutive sound sweeps. The closure body
   // records WHAT proved it, so a reader can audit the close rather than trusting the
   // status field — the same reason a gap's falsifier is carried in summary.
+  // ONLY NEWLY-CLOSED CLASSES. The clearing streak keeps growing once a class is clear, so
+  // without this every sweep re-closed the same set forever and `gaps_closed` — the field
+  // that should mark a TRANSITION — degenerated into a constant. A class re-enters the
+  // closable set only if it fails again, which re-files it and clears this record.
+  const alreadyClosed = new Set(prev.closed ?? [])
   const closedGaps: string[] = []
   for (const cls of closeEligible) {
+    if (alreadyClosed.has(cls)) continue
     const proof = real.filter((r) => r.clears === cls)
     const note =
       `CLOSED BY MEASUREMENT, not by assertion. The closure predicate for this class was evaluated by ` +
@@ -1157,7 +1164,14 @@ async function main() {
       `|| Re-opens automatically if the class fails again for 2 consecutive quiescent sweeps.`
     try {
       await post(`${DEV_VESSEL}/v2/impulses/resolve`, {
-        impulse: { pointer: { type: 'substrateGap_write', id: `fed:${cls}`, status: 'closed', closed_reason: 'falsifier_satisfied', summary: note } },
+        // category/source are RESTATED, not omitted. substrateGap_write re-derives any
+        // field the write does not carry: a closure that sent only {id,status,summary}
+        // rewrote category to "other" and source to "walk_flat_pointer", quietly
+        // corrupting the provenance of every gap it closed. Observed on a throwaway
+        // probe gap before this path was trusted.
+        // The summary REPLACEMENT is deliberate and not data loss: it swaps the filing
+        // falsifier for the closure proof, and a re-file writes a fresh falsifier back.
+        impulse: { pointer: { type: 'substrateGap_write', id: `fed:${cls}`, category: 'architecture', source: 'substrate_detected', status: 'closed', closed_reason: 'falsifier_satisfied', summary: note } },
       }, 6000)
       closedGaps.push(`fed:${cls}`)
     } catch { /* a close that failed to write must not abort the sweep */ }
@@ -1189,6 +1203,9 @@ async function main() {
     restarts: Object.fromEntries([...rosterBefore.values()].map((s) => [s.unit, s.nRestarts])),
     failing,
     clearing,
+    // A class that FAILS again leaves the closed set, so its next clear reports as a new
+    // transition rather than being suppressed as 'already closed'.
+    closed: [...new Set([...alreadyClosed, ...closedGaps])].filter((c) => !stillFailing.has(c)),
   })
 
   if (JSON_ONLY) {
