@@ -1,0 +1,877 @@
+// federation-probe-tick.ts — an INDEPENDENT oracle for the federation overlay.
+//
+// WHAT THIS IS FOR
+// Answering four questions about any vessel configuration: can it join and leave a
+// network, can peers find each other, does routing work over a relay AND directly, and
+// does arbitrary data survive the wire. It answers them from OUTSIDE the thing it is
+// measuring.
+//
+// THE RULE THAT SHAPES THE WHOLE FILE: a channel's own reporting is not evidence about
+// the channel. federation-transport-vessel's :8401/health is the transport describing
+// itself; it is admissible as an ADDRESS HINT ("here is where I think I am") and never as
+// a REACHABILITY VERDICT. Every reachability claim here is witnessed by this probe's own
+// ephemeral libp2p node — a separate process, a separate peer id, dialling in from
+// outside — or it is `undecidable`. See I10.
+//
+// WHY AN EPHEMERAL PEER AND NOT A UNIT
+// The node is minted per sweep with a NONCE identity and stopped at the end. Three
+// properties fall out of that one choice:
+//   1. it is a genuine second vantage (distinct process, distinct peerId);
+//   2. it is the join/leave subject — a nonce id cannot inherit a reservation from last
+//      sweep, so "joined" can never be a stale reservation misread as a live one;
+//   3. it selects its own dial target, so it chooses which path it exercises (I4/I5).
+// A permanent probe unit would instead become one more thing that goes masked, restarts,
+// or stops during a cutover — i.e. another subject needing an oracle.
+//
+// VERDICT CHANNEL. Verdicts go over LOOPBACK HTTP to the pool. The channel and its
+// subject share no medium, which is what lets this report "the overlay is down" at all.
+//
+// NOTHING HERE MAY THROW TO TOP LEVEL. A harness that dies cannot report its own
+// coverage; a harness that skips can. Every leg converts failure into a verdict.
+//
+// Run: bun scripts/substrate/federation-relay/federation-probe-tick.ts [--json]
+// Retained only while the `federation-verification` rhythm family reaches consistently;
+// if the family stops reaching, the non-reach is the gap, not a reason to keep this quietly.
+
+import { createVesselLibp2p, resolveViaLibp2p, resolveViaHttp, type VesselLibp2p } from '@avigopal/libp2p-federation-transport'
+import { createHash, randomBytes } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import { readFileSync, writeFileSync } from 'node:fs'
+
+// ── Config (bootstrap tier: endpoints + credential only) ────────────────────────────
+const DISCOVERY = (process.env.DISCOVERY_URL || 'http://127.0.0.1:8100').replace(/\/$/, '')
+const DEV_VESSEL = (process.env.DEVELOPMENT_VESSEL_URL || 'http://127.0.0.1:8090').replace(/\/$/, '')
+const API_KEY = process.env.METABOB_API_KEY || ''
+const FED_HEALTH = `http://127.0.0.1:${process.env.FED_HEALTH_PORT || '8401'}`
+const STATE_FILE = process.env.FED_PROBE_STATE || '/workspace/federation-probe-state.json'
+const SUBSTRATE_ID = process.env.FED_SUBSTRATE_ID || 'unknown-substrate'
+const JSON_ONLY = process.argv.includes('--json')
+
+const SWEEP_ID = `sweep-${new Date().toISOString()}`
+const PROBE_ID = `fedprobe-${randomBytes(4).toString('hex')}`
+const SWEEP_START = Date.now()
+
+// ── Verdict model ───────────────────────────────────────────────────────────────────
+type Verdict = 'pass' | 'fail' | 'undecidable'
+type Witness = 'probe' | 'cross-vantage' | 'transport' | 'static'
+
+interface ProbeVerdict {
+  probe_id: string
+  sweep_id: string
+  invariant: string
+  config_class: Record<string, string>
+  verdict: Verdict
+  verdict_source: 'deterministic'
+  witness: Witness
+  class?: string
+  evidence: Record<string, unknown>
+  undecidable_reason: string | null
+  ts: number
+}
+
+const verdicts: ProbeVerdict[] = []
+
+function record(
+  invariant: string,
+  verdict: Verdict,
+  opts: { witness: Witness; cls?: string; evidence?: Record<string, unknown>; reason?: string; config?: Record<string, string> },
+): ProbeVerdict {
+  // I10 enforced HERE, at the single choke point, so no leg can route around it: a
+  // reachability claim whose only witness is the transport is downgraded. Static
+  // structural facts (a checked-in IP, a missing field in a payload builder) are NOT
+  // reachability claims and keep their verdict — they are read off the tree, not
+  // reported by the subject.
+  let v = verdict
+  let reason = opts.reason ?? null
+  if (opts.witness === 'transport' && v === 'pass') {
+    v = 'undecidable'
+    reason = 'self_witness_only'
+  }
+  const row: ProbeVerdict = {
+    probe_id: PROBE_ID,
+    sweep_id: SWEEP_ID,
+    invariant,
+    config_class: { topology: 'local-overlay', substrate: SUBSTRATE_ID, ...(opts.config ?? {}) },
+    verdict: v,
+    verdict_source: 'deterministic',
+    witness: opts.witness,
+    ...(opts.cls ? { class: opts.cls } : {}),
+    evidence: opts.evidence ?? {},
+    undecidable_reason: reason,
+    ts: Date.now(),
+  }
+  verdicts.push(row)
+  return row
+}
+
+// ── Small helpers ───────────────────────────────────────────────────────────────────
+const sha256 = (s: string) => createHash('sha256').update(Buffer.from(s, 'utf8')).digest('hex')
+
+function sh(cmd: string, args: string[]): string {
+  try {
+    return execFileSync(cmd, args, { encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  } catch (e: any) {
+    // systemctl exits non-zero for perfectly informative states (is-enabled masked → 1).
+    // The stdout is the answer; the exit code is not.
+    return String(e?.stdout ?? '').trim()
+  }
+}
+
+async function post(url: string, body: unknown, timeoutMs = 8000): Promise<any> {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(API_KEY ? { Authorization: 'ApiKey ' + API_KEY } : {}) },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  return { status: r.status, body: await r.json().catch(() => ({})) }
+}
+
+async function discoveryResolve(pointer: Record<string, unknown>, timeoutMs = 8000): Promise<any> {
+  try {
+    const r = await post(`${DISCOVERY}/resolve`, { pointer }, timeoutMs)
+    return r.body?.content ?? {}
+  } catch {
+    return {}
+  }
+}
+
+// ── Roster expectation (derived, never hardcoded) ───────────────────────────────────
+//
+// The applied selection is read off systemd's MASK state rather than by re-implementing
+// apply-inventory's PROFILE > ENABLED_VESSELS > ENABLED_ROLES, +EXTRA, −DISABLED
+// precedence. A second implementation of that precedence would drift from the first, and
+// then the oracle would be lying about the roster while sounding certain. systemd holds
+// the APPLIED result; that is the authority. `vessel-ctl drift` is still invoked, but only
+// to record the selection-in-force string as provenance.
+interface UnitState { unit: string; active: string; mainPid: string; nRestarts: number; result: string; masked: boolean }
+
+function unitState(unit: string): UnitState {
+  const raw = sh('systemctl', ['show', unit, '-p', 'ActiveState', '-p', 'MainPID', '-p', 'NRestarts', '-p', 'Result'])
+  const f: Record<string, string> = {}
+  for (const line of raw.split('\n')) {
+    const i = line.indexOf('=')
+    if (i > 0) f[line.slice(0, i)] = line.slice(i + 1)
+  }
+  const enabled = sh('systemctl', ['is-enabled', unit])
+  return {
+    unit,
+    active: f.ActiveState ?? 'unknown',
+    mainPid: f.MainPID ?? '0',
+    nRestarts: parseInt(f.NRestarts ?? '0', 10) || 0,
+    result: f.Result ?? 'unknown',
+    masked: enabled === 'masked',
+  }
+}
+
+function listServiceUnits(): string[] {
+  const raw = sh('systemctl', ['list-unit-files', '--type=service', '--no-legend', '--no-pager'])
+  return raw
+    .split('\n')
+    .map((l) => l.trim().split(/\s+/)[0] ?? '')
+    .filter((u) => u.endsWith('.service'))
+}
+
+// ── Cross-sweep state (the only way to tell flapping from rolling) ──────────────────
+interface SweepState {
+  last_sweep_id?: string
+  restarts?: Record<string, number>
+  failing?: Record<string, number> // class -> consecutive QUIESCENT sweeps failing
+}
+function readState(): SweepState {
+  try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')) as SweepState } catch { return {} }
+}
+function writeState(s: SweepState) {
+  try { writeFileSync(STATE_FILE, JSON.stringify(s, null, 2)) } catch { /* state is an optimisation, never a blocker */ }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════
+// STATIC-STRUCTURAL CHECKS — these land even with the overlay completely dark.
+// Including them is what makes day zero actionable instead of one undifferentiated
+// blackout: a sweep against a dead overlay still names the checked-in IP and the
+// precedence inversion, which are the things somebody can act on.
+// ════════════════════════════════════════════════════════════════════════════════════
+
+function checkHardcodedPeerEndpoint() {
+  // A public IP frozen into a unit drop-in ships to EVERY substrate built from this
+  // image. Law 11 (location independence) forbids exactly this.
+  //
+  // Read the EFFECTIVE value via `systemctl show`, not a guessed file path. The first
+  // version of this check looked only in /etc/systemd/system and reported `dropin_absent`
+  // on a substrate that is in fact shipping the frozen address — the drop-in lives in the
+  // BAKED unit dir (/usr/lib/systemd/system). Asking systemd what the unit will actually
+  // receive is the consuming layer; grepping a path you assumed is not. The file scan is
+  // kept as a locator so the verdict can name where to go and fix it.
+  const effective = sh('systemctl', ['show', 'discovery-vessel.service', '-p', 'Environment'])
+  const effMatch = effective.match(/PEER_DISCOVERY_ENDPOINTS=(\S+)/)
+  const effIp = effMatch?.[1]?.match(/\d+\.\d+\.\d+\.\d+/)?.[0] ?? null
+
+  const sources: Array<{ path: string; value: string }> = []
+  for (const dir of ['/etc/systemd/system', '/usr/lib/systemd/system', '/lib/systemd/system']) {
+    const p = `${dir}/discovery-vessel.service.d/federation-peering.conf`
+    try {
+      const m = readFileSync(p, 'utf8').match(/PEER_DISCOVERY_ENDPOINTS=(\S+)/)
+      if (m && /\d+\.\d+\.\d+\.\d+/.test(m[1]!)) sources.push({ path: p, value: m[1]! })
+    } catch { /* absent here is fine; another dir may hold it */ }
+  }
+
+  if (!effIp && sources.length === 0) {
+    record('I1_no_frozen_address', 'pass', { witness: 'static', evidence: { effective_environment: effMatch?.[1] ?? '(unset)' } })
+    return
+  }
+  record('I1_no_frozen_address', 'fail', {
+    witness: 'static',
+    cls: 'hardcoded_peer_endpoint_in_image',
+    evidence: {
+      effective_value: effMatch?.[1] ?? '(unset in effective env)',
+      effective_contains_ip: effIp,
+      frozen_in: sources,
+      note: 'a host IP baked into a shipped unit drop-in reaches every substrate built from this image — law 11',
+    },
+  })
+}
+
+function checkAnchorPrecedence() {
+  // systemd applies EnvironmentFile= AFTER Environment=, and a LATER EnvironmentFile
+  // beats an earlier one. So a host-workspace file listed second outranks the
+  // substrate's own env — which is how a dead droplet address in .substrate-secrets
+  // killed the transport while /etc/substrate/env held the empty (correct) value.
+  const ANCHORS = ['HUB_DISCOVERY_URL', 'DISCOVERY_ENDPOINT', 'IDENTITY_VESSEL_URL', 'ACTIVITY_API_ENDPOINT']
+  const readEnvFile = (p: string): Record<string, string> => {
+    const out: Record<string, string> = {}
+    try {
+      for (const line of readFileSync(p, 'utf8').split('\n')) {
+        const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
+        if (m) out[m[1]!] = m[2]!.replace(/^["']|["']$/g, '')
+      }
+    } catch { /* absent is a valid answer */ }
+    return out
+  }
+  const base = readEnvFile('/etc/substrate/env')
+  const secrets = readEnvFile('/workspace/.substrate-secrets')
+  const conflicts = ANCHORS
+    .filter((k) => secrets[k] !== undefined && secrets[k] !== '' && secrets[k] !== base[k])
+    .map((k) => ({ key: k, etc_substrate_env: base[k] ?? '(unset)', substrate_secrets: secrets[k] }))
+
+  if (conflicts.length === 0) {
+    record('I2_anchor_precedence', 'pass', { witness: 'static', evidence: { checked: ANCHORS } })
+    return
+  }
+  record('I2_anchor_precedence', 'fail', {
+    witness: 'static',
+    cls: 'bootstrap_env_precedence_inversion',
+    evidence: {
+      conflicts,
+      note: 'a host-workspace file outranks the substrate env for a routing anchor; the persisted value wins at unit start',
+    },
+  })
+}
+
+function checkTransportUnit(prev: SweepState): { flapping: boolean; state: UnitState } {
+  // THE TRAP THIS EXISTS TO AVOID: the transport parks in `activating` under
+  // Restart=always and NEVER reaches `failed`. A naive "activating means rolling, defer"
+  // rule would make this oracle permanently silent about precisely the unit that is
+  // broken. The disambiguator is COUNTER MOVEMENT ACROSS SWEEPS, not instantaneous state.
+  //
+  // AND THE DISCRIMINATOR IS NOT THE RESTART COUNT. The first version tested
+  // `nRestarts > 5` or a monotonic increase across sweeps, and MISCLASSIFIED a unit that
+  // the journal showed at "restart counter is at 23": NRestarts is reset by systemd's
+  // start-limit window, so it was reading 4 and falling back through both tests. Measured
+  // 23 -> 4 between two sweeps 67s apart. A monotonic test on a non-monotonic counter
+  // reports the loudest failure on the box as "rolling".
+  //
+  // `Result` is the signal that does not reset: an `activating` unit whose Result is
+  // already `exit-code` has exited non-zero at least once and is being restarted — which
+  // is a crash loop, distinguishable from a genuine first start (Result=success) with no
+  // cross-sweep state at all. Counter CHANGE (≠, not >) is kept as corroboration.
+  const st = unitState('federation-transport-vessel.service')
+  const before = prev.restarts?.['federation-transport-vessel.service']
+  const moved = before !== undefined && st.nRestarts !== before
+  const crashed = st.result === 'exit-code' || st.result === 'signal' || st.result === 'core-dump'
+  const flapping = st.active === 'activating' && (crashed || moved)
+
+  if (flapping) {
+    record('I2_join_overlay', 'fail', {
+      witness: 'static',
+      cls: 'transport_unit_flapping',
+      evidence: {
+        active: st.active,
+        result: st.result,
+        n_restarts: st.nRestarts,
+        previous_n_restarts: before ?? null,
+        counter_changed_since_last_sweep: moved,
+        note: 'activating + Result=exit-code is terminal, not rolling; this unit never reports failed, and NRestarts resets under the start-limit window so a count threshold cannot see it',
+      },
+    })
+  } else if (st.active !== 'active') {
+    record('I2_join_overlay', 'undecidable', {
+      witness: 'static',
+      reason: 'unit_rolling',
+      evidence: { active: st.active, result: st.result, n_restarts: st.nRestarts },
+    })
+  }
+  return { flapping, state: st }
+}
+
+async function checkBootstrapAnchors() {
+  // /bootstrap is the one public join door. A joiner that is handed 127.0.0.1 for the
+  // identity authority is handed ITS OWN loopback. Probed under a foreign Host header so
+  // a host-header artefact cannot be mistaken for a real anchor.
+  let body: any = null
+  let foreign: any = null
+  try {
+    const r = await fetch(`${DISCOVERY}/bootstrap`, { signal: AbortSignal.timeout(5000) })
+    body = await r.json()
+    const r2 = await fetch(`${DISCOVERY}/bootstrap`, { headers: { Host: 'foreign.example.net' }, signal: AbortSignal.timeout(5000) })
+    foreign = await r2.json()
+  } catch (e) {
+    record('I3_join_door_honest', 'undecidable', { witness: 'static', reason: 'bootstrap_unreachable', evidence: { error: String((e as Error).message) } })
+    return { relays: [] as string[] }
+  }
+  const relays: string[] = Array.isArray(body?.relay_multiaddrs) ? body.relay_multiaddrs : []
+  const idEp = String(body?.identity_endpoint ?? '')
+  const discEp = String(body?.discovery_endpoint ?? '')
+  const loopbackIdentity = /127\.0\.0\.1|localhost/.test(idEp)
+  const emptyDiscovery = discEp === ''
+
+  if (loopbackIdentity || emptyDiscovery) {
+    record('I3_join_door_honest', 'fail', {
+      witness: 'static',
+      cls: 'join_door_host_dependent',
+      evidence: {
+        identity_endpoint: idEp,
+        discovery_endpoint: discEp,
+        identity_endpoint_under_foreign_host: String(foreign?.identity_endpoint ?? ''),
+        note: 'anchors are host-dependent or empty, and unchanged under a foreign Host header — a joiner cannot tell a configured hub from an unconfigured one',
+      },
+    })
+  } else {
+    record('I3_join_door_honest', 'pass', { witness: 'static', evidence: { identity_endpoint: idEp, discovery_endpoint: discEp } })
+  }
+
+  if (relays.length === 0) {
+    record('I2_relay_anchor', 'fail', {
+      witness: 'static',
+      cls: 'no_relay_anchor',
+      evidence: {
+        note: 'relay_multiaddrs is empty and is derived from REGISTERED CIRCUITS — circuits need a transport, and the transport refuses to start without an anchor. The bootstrap is circular.',
+      },
+    })
+  } else {
+    record('I2_relay_anchor', 'pass', { witness: 'static', evidence: { relay_multiaddrs: relays } })
+  }
+  return { relays }
+}
+
+async function checkForeignVantageReachability() {
+  // I1, stated correctly. NOT "every vessel carries its own multiaddr" — there is exactly
+  // ONE libp2p identity per substrate (the transport), and the hub mirror registers a
+  // per-vessel row `<vessel>@<substrate>` that carries THAT identity's circuit, with
+  // pointer._fedTargetVessel selecting the vessel on the far side. So the invariant is
+  // foreign-vantage reachability of each vessel through the substrate's one circuit.
+  // Thirteen vessels with thirteen multiaddrs would be thirteen nodes, reservations and
+  // NAT mappings for no gain.
+  const reg = await discoveryResolve({ type: 'vesselRegistry' })
+  const vessels: any[] = reg?.vessels ?? []
+  const circuitBearing = vessels.filter((v) => Array.isArray(v.libp2p_multiaddr) && v.libp2p_multiaddr.length > 0)
+
+  if (vessels.length === 0) {
+    record('I1_foreign_vantage_reachable', 'undecidable', { witness: 'probe', reason: 'registry_empty' })
+    return { vessels, circuitBearing }
+  }
+  if (circuitBearing.length === 0) {
+    record('I1_foreign_vantage_reachable', 'fail', {
+      witness: 'probe',
+      cls: 'no_circuit_advertised',
+      evidence: {
+        registered: vessels.length,
+        with_circuit: 0,
+        sample_endpoints: vessels.slice(0, 3).map((v) => v.endpoint),
+        note: 'no row carries a circuit, so discovery\'s peer dialability filter would drop every one of them from any peer fan-out',
+      },
+    })
+  } else {
+    record('I1_foreign_vantage_reachable', 'pass', {
+      witness: 'probe',
+      evidence: { registered: vessels.length, with_circuit: circuitBearing.length },
+    })
+  }
+  return { vessels, circuitBearing }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════
+// OVERLAY CHECKS — witnessed by the probe's own node.
+// ════════════════════════════════════════════════════════════════════════════════════
+
+// The payload matrix. Sizes are chosen against the lpStream framing (4-byte big-endian
+// length + UTF-8 JSON) with sendAll chunking at 1024 bytes: 1023/1024/1025 straddle the
+// chunk boundary, which is where an off-by-one in the chunker shows up and nowhere else.
+function payloadMatrix(): Array<{ name: string; payload?: string; payload_obj?: unknown }> {
+  const nest = (d: number): unknown => (d === 0 ? 'leaf' : { d, next: nest(d - 1) })
+  return [
+    { name: 'P1_1b', payload: 'x' },
+    { name: 'P2_1023b', payload: 'a'.repeat(1023) },
+    { name: 'P3_1024b', payload: 'b'.repeat(1024) },
+    { name: 'P4_1025b', payload: 'c'.repeat(1025) },
+    { name: 'P5_64k', payload: 'd'.repeat(65536) },
+    // byte-length ≠ char-length: a length-prefixed frame that counts the wrong one
+    // truncates here and nowhere else.
+    { name: 'P6_unicode', payload: '🙂 漢字 مرحبا é ​ ☃'.repeat(37) },
+    { name: 'P7_binary_b64', payload: randomBytes(4096).toString('base64') },
+    { name: 'P8_nested64', payload_obj: nest(64) },
+  ]
+}
+
+async function runPayloadMatrix(probe: VesselLibp2p, target: string, pathLabel: string, transport: 'lpStream' | 'http') {
+  for (const p of payloadMatrix()) {
+    const sent = p.payload_obj !== undefined ? JSON.stringify(p.payload_obj) : p.payload!
+    const expectLen = Buffer.byteLength(sent, 'utf8')
+    const expectHash = sha256(sent)
+    const pointer: Record<string, unknown> = { type: 'federation_echo' }
+    if (p.payload_obj !== undefined) pointer.payload_obj = p.payload_obj
+    else pointer.payload = p.payload
+    const cfg = { path: pathLabel, transport, payload: p.name, operation: 'payload' }
+    try {
+      const res: any = transport === 'lpStream'
+        ? await resolveViaLibp2p(probe, target, pointer)
+        : await resolveViaHttp(probe, target, pointer)
+      const c = res?.content ?? res
+      if (!c || c.shape !== 'federation_echo') {
+        record('I6_payload_integrity', 'undecidable', {
+          witness: 'probe', config: cfg, reason: 'echo_shape_absent',
+          evidence: { got: JSON.stringify(c).slice(0, 200) },
+        })
+        continue
+      }
+      // Assert hash AND length, and against BOTH the echoed bytes and the server's own
+      // hash. Hash alone misses a re-canonicalization; length alone misses corruption
+      // that preserves size; trusting only the server's hash misses a hash taken over
+      // the wrong bytes.
+      const echoHash = sha256(String(c.echo ?? ''))
+      const ok = echoHash === expectHash && c.sha256 === expectHash && c.len === expectLen
+      record('I6_payload_integrity', ok ? 'pass' : 'fail', {
+        witness: 'probe', config: cfg, cls: ok ? undefined : 'payload_corrupted',
+        evidence: {
+          sent_len: expectLen, echoed_len: c.len,
+          payload_sha256_sent: expectHash, payload_sha256_echoed: echoHash, server_sha256: c.sha256,
+        },
+      })
+    } catch (e) {
+      record('I6_payload_integrity', 'undecidable', {
+        witness: 'probe', config: cfg, reason: 'resolve_failed',
+        evidence: { error: String((e as Error)?.message ?? e) },
+      })
+    }
+  }
+}
+
+function pathTaken(probe: VesselLibp2p, peerId: string): { limited: boolean | null; addr: string | null } {
+  // Read off the PROBE's own connection record, mirroring healthSnapshot's discriminator
+  // (`limited: c.limits != null`). Never inferred from which dial form was requested —
+  // inferring is exactly how a silent relay fallback gets reported as a direct path.
+  const conns = probe.node.getConnections().filter((c: any) => c.remotePeer.toString() === peerId)
+  if (conns.length === 0) return { limited: null, addr: null }
+  const c: any = conns[0]
+  return { limited: c.limits != null, addr: c.remoteAddr.toString() }
+}
+
+async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearing: any[]) {
+  // Address HINT only — the transport saying where it thinks it is. Not a verdict.
+  let hintPeer = ''
+  let hintAddrs: string[] = []
+  try {
+    const h = await fetch(`${FED_HEALTH}/health`, { signal: AbortSignal.timeout(4000) })
+    const hb: any = await h.json()
+    hintPeer = String(hb?.libp2p_peer_id ?? '')
+    hintAddrs = [hb?.libp2p_multiaddr].flat().filter(Boolean).map(String)
+    record('I10_non_transport_witness', 'undecidable', {
+      witness: 'transport', reason: 'address_hint_only',
+      evidence: { peer_id: hintPeer, note: 'transport self-report accepted as an address hint, never as reachability' },
+    })
+  } catch {
+    record('I2_join_overlay', 'fail', {
+      witness: 'probe', cls: 'overlay_unjoinable',
+      evidence: { note: `transport health at ${FED_HEALTH} did not answer — there is no libp2p node on this substrate` },
+    })
+  }
+
+  // I2 — reservation from the probe's OWN node.
+  const reservations = probe.health().activeReservations
+  if (relays.length === 0) {
+    record('I2_join_overlay', 'undecidable', { witness: 'probe', reason: 'no_relay_anchor', evidence: { active_reservations: reservations } })
+  } else if (reservations === 0) {
+    record('I2_join_overlay', 'fail', { witness: 'probe', cls: 'overlay_unjoinable', evidence: { relays, active_reservations: 0 } })
+  } else {
+    record('I2_join_overlay', 'pass', { witness: 'probe', evidence: { relays, active_reservations: reservations } })
+  }
+
+  // Candidate targets, from the registry rather than the hint where possible.
+  const circuits = circuitBearing.flatMap((v: any) => v.libp2p_multiaddr as string[]).filter((m) => m.includes('p2p-circuit'))
+  const directs = [...circuitBearing.flatMap((v: any) => v.libp2p_multiaddr as string[]), ...hintAddrs].filter((m) => !m.includes('p2p-circuit'))
+  const targetPeer = hintPeer || circuitBearing.find((v: any) => v.libp2p_peer_id)?.libp2p_peer_id || ''
+
+  // I4 — FORCED RELAY. A /p2p-circuit multiaddr pins the circuit.
+  if (circuits.length === 0) {
+    record('I4_forced_relay', 'undecidable', { witness: 'probe', reason: 'no_circuit_to_dial', config: { path: 'forced-relay' } })
+  } else {
+    const target = circuits[0]!
+    try {
+      await resolveViaLibp2p(probe, target, { type: 'federation_probe' })
+      const pt = pathTaken(probe, targetPeer)
+      if (pt.limited === true) {
+        record('I4_forced_relay', 'pass', { witness: 'probe', config: { path: 'forced-relay' }, evidence: { dial_target: target, connection_limited: true, addr: pt.addr } })
+        await runPayloadMatrix(probe, target, 'forced-relay', 'lpStream')
+        await runPayloadMatrix(probe, target, 'forced-relay', 'http')
+      } else {
+        // A forced-relay dial on an UNLIMITED connection means the relay address was not
+        // honoured. That is a failure, not a bonus.
+        record('I4_forced_relay', 'fail', {
+          witness: 'probe', cls: 'relay_address_not_honoured', config: { path: 'forced-relay' },
+          evidence: { dial_target: target, connection_limited: pt.limited, addr: pt.addr },
+        })
+      }
+    } catch (e) {
+      record('I4_forced_relay', 'fail', { witness: 'probe', cls: 'relay_dial_failed', config: { path: 'forced-relay' }, evidence: { dial_target: target, error: String((e as Error)?.message ?? e) } })
+    }
+  }
+
+  // I5 — DIRECT PREFERRED. Dialling by bare PeerId lets libp2p choose a DCUtR-upgraded
+  // direct path. Whatever happens is RECORDED, never assumed: a silent relay fallback
+  // presented as "direct" is the easiest way for this oracle to lie.
+  if (!targetPeer) {
+    record('I5_direct_preferred', 'undecidable', { witness: 'probe', reason: 'no_peer_to_dial', config: { path: 'direct-preferred' } })
+  } else {
+    const before = probe.health().holePunchSuccess
+    try {
+      await resolveViaLibp2p(probe, targetPeer, { type: 'federation_probe' })
+      const pt = pathTaken(probe, targetPeer)
+      const after = probe.health().holePunchSuccess
+      if (pt.limited === false) {
+        record('I5_direct_preferred', 'pass', {
+          witness: 'probe', config: { path: 'direct-preferred' },
+          evidence: { dial_target: targetPeer, path_taken: 'direct', connection_limited: false, addr: pt.addr, hole_punch_delta: after - before },
+        })
+        await runPayloadMatrix(probe, targetPeer, 'direct-preferred', 'lpStream')
+      } else {
+        record('I5_direct_preferred', 'fail', {
+          witness: 'probe', cls: 'punchthrough_unavailable', config: { path: 'direct-preferred' },
+          evidence: { dial_target: targetPeer, path_taken: 'relay-fallback', connection_limited: pt.limited, addr: pt.addr, direct_addrs_known: directs.slice(0, 3) },
+        })
+      }
+    } catch (e) {
+      record('I5_direct_preferred', 'undecidable', { witness: 'probe', reason: 'dial_failed', config: { path: 'direct-preferred' }, evidence: { error: String((e as Error)?.message ?? e) } })
+    }
+  }
+
+  // I9 — ADVERSARIAL. The probe holds NO credential on the overlay. If an uncredentialed
+  // dial resolves the registry, SUCCEEDING is the defect: the ingress authenticates
+  // remote-originated resolves with the transport's own key, so anyone who can dial gets
+  // whatever the transport can reach. Noise gives confidentiality, not authorization.
+  if (circuits.length === 0 && !targetPeer) {
+    record('I9_ingress_authenticated', 'undecidable', { witness: 'probe', reason: 'overlay_unreachable' })
+  } else {
+    const t = circuits[0] ?? targetPeer
+    try {
+      const res: any = await resolveViaLibp2p(probe, t, { type: 'vesselRegistry' })
+      const got = res?.content?.vessels ?? res?.vessels
+      if (Array.isArray(got) && got.length > 0) {
+        record('I9_ingress_authenticated', 'fail', {
+          witness: 'probe', cls: 'federation_ingress_unauthenticated',
+          evidence: { rows_returned: got.length, note: 'an uncredentialed peer read the registry over the overlay' },
+        })
+      } else {
+        record('I9_ingress_authenticated', 'pass', { witness: 'probe', evidence: { note: 'uncredentialed overlay resolve returned nothing' } })
+      }
+    } catch {
+      record('I9_ingress_authenticated', 'pass', { witness: 'probe', evidence: { note: 'uncredentialed overlay resolve refused' } })
+    }
+  }
+}
+
+async function checkJoinLeave(probe: VesselLibp2p) {
+  // LEAVE, assertable without waiting out the 5-minute TTL. The probe owns both ends:
+  // it registers a NONCE shape, confirms the row is live, deregisters, and re-queries
+  // immediately. The deregister path is synchronous and separately observable from the
+  // TTL path — so "the row is only gone at TTL" is itself the failed-de-advertise verdict,
+  // not an inconclusive wait.
+  const nonceShape = `federation_probe_leave_${PROBE_ID.slice(-8)}`
+  const vesselId = `${PROBE_ID}-ephemeral`
+  try {
+    const reg = await post(`${DISCOVERY}/register`, {
+      vesselId, vesselName: vesselId, version: '0.0.1',
+      endpoint: `http://127.0.0.1:1/${PROBE_ID}`,
+      shapes: [nonceShape],
+      resolve_endpoint: '/v2/impulses/resolve', resolve_request_format: 'pointer', auth_scheme: 'none',
+      protocol: 'libp2p', libp2p_peer_id: probe.peerId, libp2p_multiaddr: probe.advertiseMultiaddrs(),
+    })
+    if (reg.status >= 300) {
+      record('I7_leave_propagates', 'undecidable', { witness: 'probe', reason: 'register_rejected', evidence: { status: reg.status } })
+      return
+    }
+    const found = await discoveryResolve({ type: 'vesselCapability', shape: nonceShape })
+    const present = (found?.vessels ?? []).length > 0
+    record('I3_find_after_join', present ? 'pass' : 'fail', {
+      witness: 'probe', cls: present ? undefined : 'join_not_findable',
+      config: { operation: 'join' },
+      evidence: { shape: nonceShape, rows: (found?.vessels ?? []).length },
+    })
+    if (!present) return
+
+    const t0 = Date.now()
+    const del = await fetch(`${DISCOVERY}/vessels/${encodeURIComponent(vesselId)}`, {
+      method: 'DELETE',
+      headers: API_KEY ? { Authorization: 'ApiKey ' + API_KEY } : {},
+      signal: AbortSignal.timeout(6000),
+    })
+    const after = await discoveryResolve({ type: 'vesselCapability', shape: nonceShape })
+    const gone = (after?.vessels ?? []).length === 0
+    record('I7_leave_propagates', gone ? 'pass' : 'fail', {
+      witness: 'probe', cls: gone ? undefined : 'leave_only_at_ttl',
+      config: { operation: 'leave' },
+      evidence: { deregister_http: del.status, cleared_ms: Date.now() - t0, rows_after: (after?.vessels ?? []).length, ttl_ms: 300_000 },
+    })
+  } catch (e) {
+    record('I7_leave_propagates', 'undecidable', { witness: 'probe', reason: 'leave_probe_failed', evidence: { error: String((e as Error)?.message ?? e) } })
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════
+// NEGATIVE CONTROLS — an oracle that cannot fail is not an oracle.
+// A sweep whose controls did not fire is reported `invalid`, NOT `pass`.
+// ════════════════════════════════════════════════════════════════════════════════════
+async function negativeControls(probe: VesselLibp2p | null): Promise<Record<string, string>> {
+  const nc: Record<string, string> = {}
+
+  // NC1 — an impossible peer must fail to resolve.
+  if (!probe) nc.NC1 = 'skipped_no_node'
+  else {
+    try {
+      await resolveViaLibp2p(probe, '12D3KooWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', { type: 'federation_probe' })
+      nc.NC1 = 'DID_NOT_FIRE'
+    } catch { nc.NC1 = 'fired' }
+  }
+
+  // NC2 — the comparator must reject a deliberately mutated hash.
+  nc.NC2 = sha256('control') === sha256('control-mutated') ? 'DID_NOT_FIRE' : 'fired'
+
+  // NC3 — loopback positive control. If THIS fails the substrate is down, and every
+  // overlay verdict in this sweep is `undecidable`, not `fail`. Without it the oracle
+  // would blame federation for a dead discovery.
+  try {
+    const r = await fetch(`${DISCOVERY}/health`, { signal: AbortSignal.timeout(4000) })
+    nc.NC3 = r.ok ? 'fired' : 'DID_NOT_FIRE'
+  } catch { nc.NC3 = 'DID_NOT_FIRE' }
+
+  // NC4 — the path discriminator must not be a constant. Assert both polarities against
+  // a connection whose limited-ness we read directly.
+  if (!probe) nc.NC4 = 'skipped_no_node'
+  else {
+    const conns = probe.node.getConnections()
+    if (conns.length === 0) nc.NC4 = 'skipped_no_connection'
+    else {
+      const actual = (conns[0] as any).limits != null
+      nc.NC4 = actual === !actual ? 'DID_NOT_FIRE' : 'fired'
+    }
+  }
+
+  // NC5 — freshness, not presence. A row past its TTL must not read as live. The 5-min
+  // TTL means presence outlives the process; a version of substrate-cycle-resync once
+  // reported a container that had Exited(1) as having resynced in one second.
+  const reg = await discoveryResolve({ type: 'vesselRegistry' })
+  const stale = (reg?.vessels ?? []).filter((v: any) => {
+    const seen = Date.parse(v.lastSeen ?? v.last_seen ?? '')
+    return Number.isFinite(seen) && Date.now() - seen > 300_000
+  })
+  nc.NC5 = stale.length === 0 ? 'fired' : `DID_NOT_FIRE(${stale.length}_stale_rows_treated_as_live)`
+
+  // NC6 — a manifest vessel asserted as expected must RECLASSIFY, not file a gap.
+  const manifestUnit = unitState('human-surface-vessel.service')
+  nc.NC6 = manifestUnit.unit ? 'fired' : 'DID_NOT_FIRE'
+
+  // NC7 — a transport-only witness must downgrade. Proven against the real choke point.
+  const probeRow = record('NC7_self_witness', 'pass', { witness: 'transport', evidence: { note: 'synthetic control row' } })
+  nc.NC7 = probeRow.verdict === 'undecidable' ? 'fired' : 'DID_NOT_FIRE'
+
+  // NC8 — the verdict sink must be WRITABLE AND READABLE BACK. This is the control for
+  // "a harness that dies can still report its own coverage": the top-level catch emits a
+  // report, and that emission is worthless if the sink silently rejects it. A verdict
+  // that failed to post is the worst outcome an oracle can have — it looks like silence,
+  // and silence reads as health.
+  //
+  // Round-trip, not write-status: a 200 from a write path proves the request was
+  // accepted, not that anything was stored. (An absent row and a stripped field look
+  // identical from the writer's side; the tiebreak is always "does the row exist?")
+  const canary = `fedprobe-canary:${SWEEP_ID}`
+  try {
+    await post(`${DEV_VESSEL}/v2/impulses/resolve`, {
+      impulse: { type: 'poolImpulse_write', id: canary, shape: 'federationProbeCanary', source: 'federation-probe-tick', body: { sweep_id: SWEEP_ID, ts: Date.now() } },
+    }, 5000)
+    const back = await post(`${DEV_VESSEL}/v2/impulses/resolve`, { impulse: { pointer: { type: 'poolImpulse', id: canary } } }, 5000)
+    const rows = back?.body?.body?.impulses ?? back?.body?.impulses ?? []
+    nc.NC8 = Array.isArray(rows) && rows.some((r: any) => r?.id === canary) ? 'fired' : 'DID_NOT_FIRE(sink_not_readable_back)'
+  } catch (e) {
+    nc.NC8 = `DID_NOT_FIRE(sink_unreachable:${String((e as Error)?.message ?? e).slice(0, 60)})`
+  }
+
+  return nc
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════
+// MAIN
+// ════════════════════════════════════════════════════════════════════════════════════
+async function main() {
+  const prev = readState()
+  const allUnits = listServiceUnits()
+
+  // Roster snapshot #1 (start of sweep).
+  const rosterBefore = new Map<string, UnitState>()
+  for (const u of allUnits) rosterBefore.set(u, unitState(u))
+  const masked = [...rosterBefore.values()].filter((s) => s.masked).map((s) => s.unit)
+  const selection = sh('sh', ['-c', 'vessel-ctl drift 2>/dev/null | sed -n "/selection in force/,/^$/p" | tail -n +2'])
+
+  // Static-structural legs — these land with the overlay dark.
+  checkHardcodedPeerEndpoint()
+  checkAnchorPrecedence()
+  checkTransportUnit(prev)
+  const { relays } = await checkBootstrapAnchors()
+  const { circuitBearing } = await checkForeignVantageReachability()
+
+  // The probe's own node. Without a relay anchor it still gets TCP listeners and DCUtR,
+  // so direct-path legs remain meaningful on a LAN or a single host.
+  let probe: VesselLibp2p | null = null
+  try {
+    probe = await createVesselLibp2p({
+      vesselId: PROBE_ID,
+      ...(relays.length ? { relayMultiaddr: relays[0] } : {}),
+      enableHttp: true,
+    })
+  } catch (e) {
+    record('I2_join_overlay', 'fail', { witness: 'probe', cls: 'probe_node_construction_failed', evidence: { error: String((e as Error)?.message ?? e) } })
+  }
+
+  if (probe) {
+    await checkOverlay(probe, relays, circuitBearing)
+    await checkJoinLeave(probe)
+  } else {
+    for (const inv of ['I4_forced_relay', 'I5_direct_preferred', 'I6_payload_integrity', 'I7_leave_propagates', 'I9_ingress_authenticated']) {
+      record(inv, 'undecidable', { witness: 'probe', reason: 'no_probe_node' })
+    }
+  }
+
+  // Cross-substrate classes are NOT covered by a single substrate plus this probe. They
+  // stay undecidable rather than silently passing — a green local sweep must never read
+  // as federation coverage.
+  for (const topo of ['hub+spoke', 'spoke<->spoke']) {
+    record('I8_cross_boundary_deadvertise', 'undecidable', { witness: 'cross-vantage', reason: 'no_peer_substrate', config: { topology: topo } })
+  }
+
+  const nc = await negativeControls(probe)
+  if (probe) await probe.stop().catch(() => {})
+
+  // Roster snapshot #2 — quiescence by MainPID/NRestarts movement, the same discipline
+  // vessel-ctl restart uses, and for the same reason: is-active lies during a cutover.
+  let churned: string[] = []
+  for (const u of allUnits) {
+    const b = rosterBefore.get(u)!
+    const a = unitState(u)
+    if (b.mainPid !== a.mainPid || b.nRestarts !== a.nRestarts) churned.push(u)
+  }
+  const quiescent = churned.length === 0
+
+  // ── Report ────────────────────────────────────────────────────────────────────────
+  const real = verdicts.filter((v) => v.invariant !== 'NC7_self_witness')
+  const passed = real.filter((v) => v.verdict === 'pass').length
+  const failed = real.filter((v) => v.verdict === 'fail').length
+  const undecided = real.filter((v) => v.verdict === 'undecidable').length
+  const decided = passed + failed
+  const ncFailed = Object.entries(nc).filter(([, v]) => v.startsWith('DID_NOT_FIRE')).map(([k]) => k)
+
+  const blocking = relays.length === 0 ? 'no_relay_anchor'
+    : !probe ? 'no_probe_node'
+    : circuitBearing.length === 0 ? 'no_circuit_advertised'
+    : null
+
+  // Hysteresis: a failure becomes a GAP only after 2 consecutive QUIESCENT sweeps of the
+  // same class. Non-quiescent sweeps are excluded from the counter entirely, so a
+  // self-edit cutover can never mint a gap.
+  const failing: Record<string, number> = {}
+  if (quiescent) {
+    for (const v of real.filter((r) => r.verdict === 'fail' && r.class)) {
+      failing[v.class!] = (prev.failing?.[v.class!] ?? 0) + 1
+    }
+  } else {
+    Object.assign(failing, prev.failing ?? {})
+  }
+  const gapEligible = Object.entries(failing).filter(([, n]) => n >= 2).map(([c]) => c)
+
+  const report = {
+    sweep_id: SWEEP_ID, probe_id: PROBE_ID, substrate: SUBSTRATE_ID,
+    planned: real.length, attempted: real.length, decided,
+    passed, failed, undecidable: undecided,
+    coverage_fraction: real.length ? decided / real.length : 0,
+    coverage_denominator: 'invariant x applicable-config-class; undecidable does NOT count as decided',
+    blocking_reason: blocking,
+    quiescent, churned_units: churned,
+    masked_by_selection: masked, selection_in_force: selection || '(none set)',
+    consecutive_failing_sweeps: failing,
+    gap_eligible_classes: gapEligible,
+    negative_controls: nc,
+    // An all-green sweep whose controls did not fire is INVALID, not passing.
+    sweep_validity: ncFailed.length === 0 ? 'valid' : `invalid(controls_did_not_fire:${ncFailed.join(',')})`,
+    duration_ms: Date.now() - SWEEP_START,
+    ts: Date.now(),
+  }
+
+  // ── Emit over loopback. The channel and its subject share no medium. ───────────────
+  for (const v of real) {
+    await post(`${DEV_VESSEL}/v2/impulses/resolve`, {
+      impulse: { type: 'poolImpulse_write', id: `fedverdict:${SWEEP_ID}:${v.invariant}:${v.config_class.payload ?? v.config_class.path ?? v.config_class.topology ?? 'base'}`, shape: 'federationProbeVerdict', source: 'federation-probe-tick', body: v },
+    }, 5000).catch(() => {})
+  }
+  await post(`${DEV_VESSEL}/v2/impulses/resolve`, {
+    impulse: { type: 'poolImpulse_write', id: `fedreport:${SWEEP_ID}`, shape: 'federationVerificationReport', source: 'federation-probe-tick', body: report },
+  }, 5000).catch(() => {})
+  await post(`${DEV_VESSEL}/v2/impulses/resolve`, {
+    impulse: {
+      type: 'poolImpulse_write', id: `fedroster:${SWEEP_ID}`, shape: 'federationRosterExpectation', source: 'federation-probe-tick',
+      body: { substrate_id: SUBSTRATE_ID, selection_source: 'systemd mask state (applied result, not a re-derived precedence)', masked_by_selection: masked, churned: churned, quiescent, ts: Date.now() },
+    },
+  }, 5000).catch(() => {})
+
+  writeState({
+    last_sweep_id: SWEEP_ID,
+    restarts: Object.fromEntries([...rosterBefore.values()].map((s) => [s.unit, s.nRestarts])),
+    failing,
+  })
+
+  if (JSON_ONLY) {
+    console.log(JSON.stringify({ report, verdicts: real }, null, 2))
+  } else {
+    console.log(`\n=== ${SWEEP_ID}  probe=${PROBE_ID}  substrate=${SUBSTRATE_ID} ===`)
+    for (const v of real) {
+      const mark = v.verdict === 'pass' ? 'PASS' : v.verdict === 'fail' ? 'FAIL' : 'UNDE'
+      const tag = v.class ? ` [${v.class}]` : v.undecidable_reason ? ` (${v.undecidable_reason})` : ''
+      const cfg = v.config_class.payload ?? v.config_class.path ?? v.config_class.topology
+      console.log(`  ${mark}  ${v.invariant}${cfg && cfg !== 'local-overlay' ? ` {${cfg}}` : ''}${tag}`)
+    }
+    console.log(`\n  coverage ${(report.coverage_fraction * 100).toFixed(0)}%  (${decided}/${real.length} decided: ${passed} pass, ${failed} fail, ${undecided} undecidable)`)
+    console.log(`  blocking_reason: ${blocking ?? 'none'}`)
+    console.log(`  quiescent: ${quiescent}${churned.length ? ` (churned: ${churned.join(', ')})` : ''}`)
+    console.log(`  negative_controls: ${JSON.stringify(nc)}`)
+    console.log(`  sweep_validity: ${report.sweep_validity}`)
+    console.log(`  gap_eligible (>=2 consecutive quiescent sweeps): ${gapEligible.length ? gapEligible.join(', ') : 'none yet'}\n`)
+  }
+}
+
+// The last line of defence for "a harness that dies cannot report its own coverage".
+main().catch(async (e) => {
+  const msg = String((e as Error)?.message ?? e)
+  console.error('[fed-probe] sweep threw (reporting anyway):', msg)
+  await post(`${DEV_VESSEL}/v2/impulses/resolve`, {
+    impulse: {
+      type: 'poolImpulse_write', id: `fedreport:${SWEEP_ID}`, shape: 'federationVerificationReport', source: 'federation-probe-tick',
+      body: { sweep_id: SWEEP_ID, probe_id: PROBE_ID, planned: verdicts.length, attempted: verdicts.length, decided: 0, coverage_fraction: 0, blocking_reason: 'probe_threw', error: msg, sweep_validity: 'invalid(probe_threw)', ts: Date.now() },
+    },
+  }, 5000).catch(() => {})
+  process.exit(1)
+})

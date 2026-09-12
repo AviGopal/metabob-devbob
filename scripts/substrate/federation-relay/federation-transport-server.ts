@@ -11,6 +11,7 @@
 import { createVesselLibp2p, serveResolve, serveResolveHttp, resolveViaLibp2p, resolveViaHttp, type VesselLibp2p } from '@avigopal/libp2p-federation-transport'
 import { ping } from '@libp2p/ping'
 import { hostname } from 'node:os'
+import { createHash } from 'node:crypto'
 import { multiaddr } from '@multiformats/multiaddr'
 
 // RESILIENCE: libp2p internals emit 'error' events on streams/sockets that have no
@@ -296,6 +297,34 @@ const resolveHandler = async (pointer: any): Promise<any> => {
     return { shape: 'federation_probe', produced_by: VESSEL_ID, value: 'hello-over-libp2p-http', note: 'resolved where the data lives, over libp2p' }
   if (EXTRA_SHAPE && t === EXTRA_SHAPE)
     return { shape: EXTRA_SHAPE, produced_by: VESSEL_ID, value: 'cross-substrate-resolve-ok', note: 'resolved on the PEER substrate over libp2p (genuine cross-substrate)' }
+  // PAYLOAD INTEGRITY. federation_probe above returns a CONSTANT — it echoes nothing, so
+  // it cannot detect a truncated frame, and a truncation is exactly the failure the
+  // lpStream framing (4-byte BE length + UTF-8 JSON, sendAll chunking at 1024B) can
+  // produce. This shape carries the caller's bytes back.
+  //
+  // Return the echo AND a SERVER-computed sha256 over the bytes actually received. Those
+  // are two independent witnesses: a corrupted echo and a hash taken over the wrong bytes
+  // are distinguishable, where a single field would let one defect mask the other. The
+  // caller asserts BOTH hash and byte-length — hash alone misses a re-canonicalization,
+  // length alone misses corruption that preserves size.
+  //
+  // `payload` is a string echoed verbatim (no re-encoding on this side). `payload_obj`
+  // exists for the nested-JSON class, where the point is to exercise the envelope parser
+  // rather than the framing; it is echoed as its serialization, which the caller compares
+  // against its own.
+  if (t === 'federation_echo') {
+    const hasObj = Object.prototype.hasOwnProperty.call(pointer ?? {}, 'payload_obj')
+    const payload = hasObj ? JSON.stringify(pointer.payload_obj) : String(pointer?.payload ?? '')
+    const bytes = Buffer.from(payload, 'utf8')
+    return {
+      shape: 'federation_echo',
+      produced_by: VESSEL_ID,
+      len: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      echo: payload,
+      source_field: hasObj ? 'payload_obj' : 'payload',
+    }
+  }
   try {
     return await proxyToLocalOwner(pointer)
   } catch (e) {
@@ -516,7 +545,7 @@ async function register() {
       body: JSON.stringify({
         vesselId: VESSEL_ID, vesselName: VESSEL_ID, version: '0.1.0',
         endpoint: `http://127.0.0.1:${HEALTH_PORT}`,           // HTTP surface (health + self-recovery probe)
-        shapes: ['federation_probe', ...(EXTRA_SHAPE ? [EXTRA_SHAPE] : [])],
+        shapes: ['federation_probe', 'federation_echo', ...(EXTRA_SHAPE ? [EXTRA_SHAPE] : [])],
         resolve_endpoint: '/v2/impulses/resolve', resolve_request_format: 'pointer', auth_scheme: 'none',
         protocol: 'libp2p',                          // signals libp2p-overlay reachability
         libp2p_peer_id: vl.peerId,                   // proper discovery-contract fields (not metadata —
@@ -630,7 +659,7 @@ async function registerAtHub() {
     // The transport's own row anchors the substrate ingress (probe shape only — shape
     // traffic belongs to the per-vessel rows below).
     const registrations = [
-      ...(SELF_MIRROR ? [] : [{ vesselId: HUB_VESSEL_ID, shapes: ['federation_probe', ...(EXTRA_SHAPE ? [EXTRA_SHAPE] : [])] }]),
+      ...(SELF_MIRROR ? [] : [{ vesselId: HUB_VESSEL_ID, shapes: ['federation_probe', 'federation_echo', ...(EXTRA_SHAPE ? [EXTRA_SHAPE] : [])] }]),
       ...rows.map((r) => ({ vesselId: `${r.vesselId}@${SUBSTRATE_ID}`, shapes: r.shapes })),
     ]
     const results = await Promise.all(registrations.map(async (reg) => {
