@@ -879,7 +879,11 @@ async function main() {
   const FALSIFIERS: Record<string, string> = {
     hardcoded_peer_endpoint_in_image: 'no shipped unit or drop-in sets a routing endpoint containing a literal IP, and `systemctl show discovery-vessel -p Environment` contains no IP literal.',
     bootstrap_env_precedence_inversion: 'no routing anchor (HUB_DISCOVERY_URL, DISCOVERY_ENDPOINT, IDENTITY_VESSEL_URL, ACTIVITY_API_ENDPOINT) differs between /workspace/.substrate-secrets and /etc/substrate/env.',
-    transport_unit_flapping: 'federation-transport-vessel.service reports ActiveState=active with Result=success for a full sweep interval.',
+    // Deliberately an INTERVAL predicate, not an instantaneous one: this unit reports
+    // ActiveState=active with Result=success during its up-phase, so an instant snapshot
+    // is satisfiable by a unit that is still crash-looping. Closure requires NRestarts
+    // and MainPID unchanged across two samples bracketing a full sweep.
+    transport_unit_flapping: 'federation-transport-vessel.service shows NRestarts AND MainPID unchanged across two samples bracketing a full sweep interval (an instantaneous ActiveState=active / Result=success does NOT satisfy this — the unit reports exactly that during each up-phase of its crash loop).',
     join_door_host_dependent: 'GET /bootstrap returns a non-empty discovery_endpoint and a non-loopback identity_endpoint when queried under a foreign Host header.',
     no_relay_anchor: 'GET /bootstrap returns a non-empty relay_multiaddrs, OR the transport holds a reservation with no relay anchor configured (direct-only overlay is a valid answer).',
     no_circuit_advertised: 'at least one vesselRegistry row carries a non-empty libp2p_multiaddr with a fresh lastSeen.',
