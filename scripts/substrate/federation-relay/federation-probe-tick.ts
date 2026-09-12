@@ -930,8 +930,12 @@ async function main() {
   // This does not guess whether the disappearance is a fix or a regression in the
   // instrument — it names it so a reader can ask. A class here with its gap still open is
   // the signature of the instrument having stopped looking.
+  const cleared = new Set(real.filter((r) => r.verdict === 'pass' && r.clears).map((r) => r.clears!))
   const reportedClasses = new Set(real.filter((r) => r.class).map((r) => r.class!))
-  const noLongerReported = Object.keys(prev.failing ?? {}).filter((c) => !reportedClasses.has(c))
+  // A class explicitly CLEARED this sweep is not a class that went missing — it was
+  // positively proven and is excluded below, so the warning keeps naming only the genuine
+  // disappearances it exists to surface.
+  const noLongerReported = Object.keys(prev.failing ?? {}).filter((c) => !reportedClasses.has(c) && !cleared.has(c))
 
   // ── CLOSURE. Law 7 measures gap close rate, latency and durability, and a store that
   // only ever files is a ratchet, not a measure: before this, fed:transport_unit_flapping
@@ -948,8 +952,13 @@ async function main() {
   //      Closing on a single green reading is how a gap store fills with things that
   //      reopen wearing a different hat; closing slowly costs one cadence interval and
   //      buys durability, which is the third term of the triple.
-  // A sweep whose controls did not fire cannot close anything at all.
-  const cleared = new Set(real.filter((r) => r.verdict === 'pass' && r.clears).map((r) => r.clears!))
+  //
+  // A sweep with a control in DID_NOT_FIRE (a control that ran and failed to detect what
+  // it exists to detect) closes nothing. An INERT control — one that could not run at all,
+  // like NC4 with no connection to inspect — does NOT block closure, because requiring it
+  // would mean no static verdict could ever close a gap on a single-substrate deployment,
+  // where NC4 structurally cannot fire. The distinction is deliberate and the inert set is
+  // recorded in every closure body, so a reader sees which controls were not watching.
   const stillFailing = new Set(real.filter((r) => r.verdict === 'fail' && r.class).map((r) => r.class!))
   const clearingNow = [...cleared].filter((c) => !stillFailing.has(c))
 
@@ -1047,6 +1056,7 @@ async function main() {
       `Proven by: ${proof.map((r) => `${r.invariant} PASS ${JSON.stringify(r.evidence)}`).join(' || ')} ` +
       `|| Closure required a verdict row to NAME this class as cleared; a class merely ceasing to be ` +
       `reported never closes a gap here, because absence and repair are indistinguishable from the outside. ` +
+      `|| Negative controls during those sweeps: all fired except inert=[${ncInert.join(',') || 'none'}] (a control that could not run, recorded so the close can be audited). `+
       `|| Re-opens automatically if the class fails again for 2 consecutive quiescent sweeps.`
     try {
       await post(`${DEV_VESSEL}/v2/impulses/resolve`, {
