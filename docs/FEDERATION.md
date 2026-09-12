@@ -352,6 +352,31 @@ no deployment publishes. Those addresses are reachable from inside the
 container's own network and not from another host, so a relay-less transport is
 usable for *egress* to a relayed peer, but is not itself remotely dialable.
 
+**Over a circuit, only the lpStream path carries real payloads.** Measured across
+a live relay, per payload class: the lpStream path (`resolveViaLibp2p`) round-trips
+every class byte-identically — 1 B, the 1023/1024/1025 B chunk boundary, 64 KB,
+unicode, base64 binary, and 64-level nested JSON. The HTTP-over-libp2p path
+(`resolveViaHttp`) carries the 1-byte case and fails every class above it. The same
+matrix over a *direct* connection passes on both paths, so the ceiling is
+specifically HTTP-over-libp2p **across a circuit**. Callers that must move more
+than a token payload cross-substrate should use the lpStream path; the HTTP path
+remains only for peers that have not migrated.
+
+**`limits` tells you the relay's policy, not the path.** A connection's
+`limits != null` means the circuit is byte/time capped, and a relay run with
+`applyDefaultLimit: false` — which `scripts/substrate/federation-relay/relay.ts`
+does — produces uncapped circuits, so a genuinely relayed connection reports
+"not limited". To tell relayed from direct, look for a `/p2p-circuit` component in
+the connection's negotiated `remoteAddr`; treat `limits` as information about the
+relay, not about the route.
+
+**A federation unit that hard-exits is invisible.** `federation-relay` exits
+non-zero when `PUBLIC_IP` is unset, and under `Restart=always` that parks it in
+`activating` forever — it never reaches `failed`, so no `ActiveState` check above
+it fires. Supply the value as a unit drop-in rather than appending it to
+`/etc/substrate/env`, which `gen-env` truncates on every boot; that truncation is
+why the documented hand-carry of `RELAY_MULTIADDR` never survived a restart.
+
 ## End-to-end harness
 
 `repos/libp2p-federation-transport/federation-hub-e2e.ts` exercises the full loop
