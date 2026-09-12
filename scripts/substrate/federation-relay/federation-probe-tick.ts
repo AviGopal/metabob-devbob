@@ -945,8 +945,29 @@ async function main() {
   // Cross-substrate classes are NOT covered by a single substrate plus this probe. They
   // stay undecidable rather than silently passing — a green local sweep must never read
   // as federation coverage.
+  // The reason must reflect what is actually true right now. This block used to hardcode
+  // `no_peer_substrate`, and it kept saying so after a real second substrate had joined
+  // and was visibly mirroring eight rows into this registry — an oracle asserting a
+  // falsehood about its own environment, which is the failure it exists to prevent.
+  // Distinguish "there is nobody to test against" from "there is somebody and this check
+  // cannot yet orchestrate the departure it would need".
+  const foreignSubstrates = [...new Set(
+    (registryRows ?? [])
+      .map((v: any) => String(v.vesselId ?? ''))
+      .filter((id) => id.includes('@'))
+      .map((id) => id.split('@')[1]!)
+      .filter((sid) => sid && sid !== SUBSTRATE_ID),
+  )]
   for (const topo of ['hub+spoke', 'spoke<->spoke']) {
-    record('I8_cross_boundary_deadvertise', 'undecidable', { witness: 'cross-vantage', reason: 'no_peer_substrate', config: { topology: topo } })
+    record('I8_cross_boundary_deadvertise', 'undecidable', {
+      witness: 'cross-vantage',
+      reason: foreignSubstrates.length > 0 ? 'requires_orchestrated_departure' : 'no_peer_substrate',
+      config: { topology: topo },
+      evidence: { peer_substrates_present: foreignSubstrates,
+        note: foreignSubstrates.length > 0
+          ? 'a peer substrate IS federated here; deciding this invariant needs a controlled stop of that peer, which a read-only sweep must not perform against a live peer'
+          : 'no @-qualified foreign rows in this registry' },
+    })
   }
 
   const nc = await negativeControls(probe)
