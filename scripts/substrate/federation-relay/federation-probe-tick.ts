@@ -479,9 +479,10 @@ async function runPayloadMatrix(probe: VesselLibp2p, target: string, pathLabel: 
     else pointer.payload = p.payload
     const cfg = { path: pathLabel, transport, payload: p.name, operation: 'payload' }
     try {
-      const res: any = transport === 'lpStream'
-        ? await resolveViaLibp2p(probe, target, pointer)
-        : await resolveViaHttp(probe, target, pointer)
+      const res: any = await withTimeout(
+        transport === 'lpStream' ? resolveViaLibp2p(probe, target, pointer) : resolveViaHttp(probe, target, pointer),
+        20_000, `${p.name} via ${transport} on ${pathLabel}`,
+      )
       const c = res?.content ?? res
       if (!c || c.shape !== 'federation_echo') {
         record('I6_payload_integrity', 'undecidable', {
@@ -510,6 +511,20 @@ async function runPayloadMatrix(probe: VesselLibp2p, target: string, pathLabel: 
       })
     }
   }
+}
+
+// NOTHING IN A SWEEP MAY HANG. resolveViaLibp2p and resolveViaHttp carry no timeout of
+// their own — they inherit libp2p dial defaults only — so a single slow leg can consume
+// the whole sweep and produce NO report at all, which is strictly worse than a failing
+// report: a harness that dies cannot report its own coverage. Observed live the first time
+// the forced-relay path started passing, which unlocked the 64KB payload over
+// HTTP-over-libp2p across a circuit; the sweep produced zero output and was killed at 300s.
+// A timed-out leg becomes an `undecidable` verdict and the sweep continues.
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`probe_timeout after ${ms}ms: ${label}`)), ms)),
+  ])
 }
 
 function pathTaken(probe: VesselLibp2p, peerId: string): { relayed: boolean | null; limited: boolean | null; addr: string | null } {
@@ -601,7 +616,7 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
   } else {
     const target = circuits[0]!
     try {
-      await resolveViaLibp2p(probe, target, { type: 'federation_probe' })
+      await withTimeout(resolveViaLibp2p(probe, target, { type: 'federation_probe' }), 20_000, 'forced-relay probe dial')
       const pt = pathTaken(probe, targetPeer)
       if (pt.relayed === true) {
         record('I4_forced_relay', 'pass', { witness: 'probe', clears: 'relay_address_not_honoured', config: { path: 'forced-relay' }, evidence: { dial_target: target, path_taken: 'relay', relayed: true, connection_limited: pt.limited, relay_caps_circuits: pt.limited, addr: pt.addr } })
@@ -629,7 +644,7 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
   } else {
     const before = probe.health().holePunchSuccess
     try {
-      await resolveViaLibp2p(probe, targetPeer, { type: 'federation_probe' })
+      await withTimeout(resolveViaLibp2p(probe, targetPeer, { type: 'federation_probe' }), 20_000, 'direct-preferred probe dial')
       const pt = pathTaken(probe, targetPeer)
       const after = probe.health().holePunchSuccess
       if (pt.relayed === false) {
@@ -658,7 +673,7 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
   } else {
     const t = circuits[0] ?? targetPeer
     try {
-      const res: any = await resolveViaLibp2p(probe, t, { type: 'vesselRegistry' })
+      const res: any = await withTimeout(resolveViaLibp2p(probe, t, { type: 'vesselRegistry' }), 20_000, 'uncredentialed ingress dial')
       const got = res?.content?.vessels ?? res?.vessels
       if (Array.isArray(got) && got.length > 0) {
         record('I9_ingress_authenticated', 'fail', {
