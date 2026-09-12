@@ -3973,5 +3973,92 @@ inside it, but the prediction was made before the partition existed, so the
 range was right for the wrong reason.
 
 
+## AO. Post-repair reach, and three retracted impact claims
+
+**Pre-registered before querying.** Window **2026-09-11T21:02Z → 2026-09-12T01:00Z**
+(~4h, zero operator `run_goal` dispatches; only resolves and gap writes).
+Metric: goal-level `goal_verification_labels`, never execution-level. Trivial
+arithmetic probes excluded and reported separately. Stated expectation: **no
+significant change**, because the credential blocker was untouched.
+
+| Denominator | Achieved | n | Rate |
+|---|---|---|---|
+| All labels | 5 | 48 | 10.4% |
+| Trivial arithmetic probes | 2 | 2 | 100% |
+| **Non-trivial** | **3** | **46** | **6.5%** |
+
+Against the prior window (6/47 = 12.8%, 16:45–21:02Z): **Fisher two-tailed
+p = 0.486** — not distinguishable. The pre-registered expectation held.
+
+Every label in the window was written by the `deterministic` labeler; no LLM
+judge participated.
+
+The 6.5% is itself generous. Of the three non-trivial `achieved`, **two are the
+same goal** (`investigate and decompose gap
+org-isolation-on-trace-reads-is-enforced-by-neither-layer`, labelled twice) and
+the third is an internal liveness self-probe (`Report how many shapes the
+discovery registry currently advertises`). Deduplicated and excluding the
+self-probe, **one distinct non-trivial goal reached in four hours.**
+
+A field-name trap worth recording: the column is `goal`, not `goal_text`.
+Selecting `goal_text` returns rows with `null` in that position and **no error**,
+which would have supported the false conclusion "no trivial probes in the
+achieved set." The exclusion test only works once the field name is right.
+
+### Three impact claims retracted
+
+One fact voids all three: **isolated composes stage into a fresh worktree built
+from the committed tree**, not from the dirty main clone — the same worktree path
+whose `.git`-is-a-FILE indirection commit `29756da` fixed. Uncommitted content in
+`/workspace/git/super-repo/repos/<vessel>` is therefore never what a drafter
+reads.
+
+1. *"Every compose in the 20:51–00:35 window drafted against a degraded
+   `feature-compose.ts`."* **False** — no compose was contaminated.
+2. *"Clearing the stuck rebase drained a blocked queue; five commits landed at
+   once as the effect."* **False.** Author dates are 22:43, 22:52, 00:22, 00:30,
+   00:36 — spread across the supposed stall. `origin/dev` landed continuously
+   through it (22:24, 22:43, 22:52, 00:22, 00:30, 00:42); landings resumed at
+   **22:24, ~1.5h before the repair at 00:35**, and the rate rise begins 00:22,
+   also before. The "five at 00:44" was the detached clone HEAD advancing in one
+   step. **The repair had no measurable effect on landing rate.**
+3. *"goal-host-vessel's compose lane has been structurally dead 18h because its
+   `src/index.ts` is a 3-line placeholder."* **False** — six goal-host commits
+   landed after the stub appeared (09:03, 12:48, 15:31, 16:45, 17:05, 17:19). The
+   17-in-24h-before vs 6-since drop is real but **confounded** by deepening LLM
+   credential starvation and by operator dispatches occupying the lane.
+
+The common error: measuring the **dirty clone and its HEAD**, when behaviour is
+decided by the committed tree and "did it work" is decided by `origin/dev`'s
+commit timeline. A correlation (repair 00:35 → burst 00:44) survived nine minutes
+of scrutiny and died to one `git log --pretty=%ad`.
+
+### What survives
+
+- The 3.5h stuck rebase was real, and **nothing detected it** — process-health
+  watchdogs were green throughout. The process was fine; its working tree was
+  not. Gap filed and left **open**, because the detector is the gap.
+- A submodule's `.git` is a **file**, so a naive `.git/rebase-merge` probe reports
+  "no rebase in progress". Resolve `git rev-parse --git-dir` first.
+- **Detached HEAD is not a defect** — 17 of 18 clones are detached by design
+  (mitosis cutover checks out a commit). Only the rebase state mattered.
+- `goal-host-vessel/src/index.ts` in the clone is genuinely a 3-line stub where
+  15,314 lines belong, uncommitted since 09-11 06:53 — a **hazard** (a rebuild
+  sourced from that tree ships a stub), not an active outage.
+- 14 tracked-modified source files across 8 repos are uncommitted; the running
+  `/vessels` copy of goal-host `src/index.ts` diverges from committed HEAD by
+  **+1298/−128 lines**.
+
+### The framing this corrects
+
+**25 substrate-authored commits landed on `origin/dev` in ~11.5 hours**, and
+`2a54e9a` satisfies the stated autonomy criterion — substrate-authored, on the
+remote working branch, no operator hands. The "composer is BLOCKED / 0 successes
+per 100 executions" framing used earlier in this session does not describe the
+system. Reach at ~6–13% and a working autonomous commit loop are both true at
+once: the loop lands changes reliably; what it does not do is **reach arbitrary
+useful goals**.
+
+
 *This addendum is not covered by SHA256SUMS.json, which attests the 09-09
 artifact set only.*
