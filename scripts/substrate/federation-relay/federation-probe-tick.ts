@@ -512,14 +512,28 @@ async function runPayloadMatrix(probe: VesselLibp2p, target: string, pathLabel: 
   }
 }
 
-function pathTaken(probe: VesselLibp2p, peerId: string): { limited: boolean | null; addr: string | null } {
-  // Read off the PROBE's own connection record, mirroring healthSnapshot's discriminator
-  // (`limited: c.limits != null`). Never inferred from which dial form was requested —
-  // inferring is exactly how a silent relay fallback gets reported as a direct path.
+function pathTaken(probe: VesselLibp2p, peerId: string): { relayed: boolean | null; limited: boolean | null; addr: string | null } {
+  // Read off the PROBE's own connection record. Never inferred from which dial form was
+  // requested — inferring is exactly how a silent relay fallback gets reported as direct.
+  //
+  // THE PRIMARY SIGNAL IS THE ADDRESS, NOT `limited`. The first version used
+  // healthSnapshot's `limited: c.limits != null` as the relayed/direct discriminator, and
+  // the live fixture falsified it immediately: a dial pinned to a /p2p-circuit multiaddr
+  // came back limited=false, which the probe scored as "the relay address was not
+  // honoured". It had been honoured — the connection's remoteAddr was the circuit address.
+  // `limits` is null because scripts/substrate/federation-relay/relay.ts configures the
+  // relay with applyDefaultLimit:false, so a genuinely relayed connection through it
+  // carries no byte/time cap at all.
+  //
+  // So `limited` measures "is this circuit CAPPED", which is a property of the relay's
+  // policy, not of the path. A /p2p-circuit component in the negotiated remoteAddr is what
+  // actually means "this went through a relay". Both are reported: the address decides,
+  // the cap is corroboration and is informative about which relay policy is in force.
   const conns = probe.node.getConnections().filter((c: any) => c.remotePeer.toString() === peerId)
-  if (conns.length === 0) return { limited: null, addr: null }
+  if (conns.length === 0) return { relayed: null, limited: null, addr: null }
   const c: any = conns[0]
-  return { limited: c.limits != null, addr: c.remoteAddr.toString() }
+  const addr = c.remoteAddr.toString()
+  return { relayed: addr.includes('/p2p-circuit'), limited: c.limits != null, addr }
 }
 
 async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearing: any[]) {
@@ -556,7 +570,18 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
   }
 
   // I2 — reservation from the probe's OWN node.
-  const reservations = probe.health().activeReservations
+  //
+  // POLLED, not sampled once. createVesselLibp2p dials the relay and returns before the
+  // circuit-relay transport has finished reserving, so an immediate read of
+  // activeReservations measures "has the handshake completed yet", not "can this peer
+  // join". The first fixture run scored overlay_unjoinable against a relay that was
+  // working and a transport that reserved successfully moments later. federation-hub-e2e
+  // already polls 40x500ms for exactly this reason; matched here.
+  let reservations = probe.health().activeReservations
+  for (let i = 0; i < 30 && reservations === 0 && relays.length > 0; i++) {
+    await new Promise((r) => setTimeout(r, 500))
+    reservations = probe.health().activeReservations
+  }
   if (relays.length === 0) {
     record('I2_join_overlay', 'undecidable', { witness: 'probe', reason: 'no_relay_anchor', evidence: { active_reservations: reservations } })
   } else if (reservations === 0) {
@@ -578,8 +603,8 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
     try {
       await resolveViaLibp2p(probe, target, { type: 'federation_probe' })
       const pt = pathTaken(probe, targetPeer)
-      if (pt.limited === true) {
-        record('I4_forced_relay', 'pass', { witness: 'probe', clears: 'relay_dial_failed', config: { path: 'forced-relay' }, evidence: { dial_target: target, connection_limited: true, addr: pt.addr } })
+      if (pt.relayed === true) {
+        record('I4_forced_relay', 'pass', { witness: 'probe', clears: 'relay_address_not_honoured', config: { path: 'forced-relay' }, evidence: { dial_target: target, path_taken: 'relay', relayed: true, connection_limited: pt.limited, relay_caps_circuits: pt.limited, addr: pt.addr } })
         await runPayloadMatrix(probe, target, 'forced-relay', 'lpStream')
         await runPayloadMatrix(probe, target, 'forced-relay', 'http')
       } else {
@@ -587,7 +612,8 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
         // honoured. That is a failure, not a bonus.
         record('I4_forced_relay', 'fail', {
           witness: 'probe', cls: 'relay_address_not_honoured', config: { path: 'forced-relay' },
-          evidence: { dial_target: target, connection_limited: pt.limited, addr: pt.addr },
+          evidence: { dial_target: target, path_taken: pt.relayed === false ? 'direct' : 'unknown', relayed: pt.relayed, connection_limited: pt.limited, addr: pt.addr,
+            note: 'a dial pinned to a /p2p-circuit multiaddr did not negotiate a circuit address' },
         })
       }
     } catch (e) {
@@ -606,16 +632,16 @@ async function checkOverlay(probe: VesselLibp2p, relays: string[], circuitBearin
       await resolveViaLibp2p(probe, targetPeer, { type: 'federation_probe' })
       const pt = pathTaken(probe, targetPeer)
       const after = probe.health().holePunchSuccess
-      if (pt.limited === false) {
+      if (pt.relayed === false) {
         record('I5_direct_preferred', 'pass', {
           witness: 'probe', clears: 'punchthrough_unavailable', config: { path: 'direct-preferred' },
-          evidence: { dial_target: targetPeer, path_taken: 'direct', connection_limited: false, addr: pt.addr, hole_punch_delta: after - before },
+          evidence: { dial_target: targetPeer, path_taken: 'direct', relayed: false, connection_limited: pt.limited, addr: pt.addr, hole_punch_delta: after - before },
         })
         await runPayloadMatrix(probe, targetPeer, 'direct-preferred', 'lpStream')
       } else {
         record('I5_direct_preferred', 'fail', {
           witness: 'probe', cls: 'punchthrough_unavailable', config: { path: 'direct-preferred' },
-          evidence: { dial_target: targetPeer, path_taken: 'relay-fallback', connection_limited: pt.limited, addr: pt.addr, direct_addrs_known: directs.slice(0, 3) },
+          evidence: { dial_target: targetPeer, path_taken: 'relay-fallback', relayed: pt.relayed, connection_limited: pt.limited, addr: pt.addr, direct_addrs_known: directs.slice(0, 3) },
         })
       }
     } catch (e) {
@@ -756,12 +782,17 @@ async function negativeControls(probe: VesselLibp2p | null): Promise<Record<stri
   // `fired`: a constant-true and a genuine read are indistinguishable from one sample.
   if (!probe) nc.NC4 = 'skipped_no_node'
   else {
-    const flags = probe.node.getConnections().map((c: any) => c.limits != null)
-    const sawLimited = flags.some((f) => f)
+    // Polarity is measured on the ADDRESS, matching pathTaken: a /p2p-circuit component
+    // means relayed. Measuring `limits != null` here would inherit the same defect the
+    // live fixture exposed in I4 — against a relay configured applyDefaultLimit:false
+    // every connection reads "not limited", so this control would report one polarity
+    // forever and never notice the discriminator had gone blind.
+    const flags = probe.node.getConnections().map((c: any) => String(c.remoteAddr).includes('/p2p-circuit'))
+    const sawRelayed = flags.some((f) => f)
     const sawDirect = flags.some((f) => !f)
     nc.NC4 = flags.length === 0 ? 'skipped_no_connection'
-      : sawLimited && sawDirect ? 'fired'
-      : `partial_one_polarity_only(${sawLimited ? 'limited' : 'direct'})`
+      : sawRelayed && sawDirect ? 'fired'
+      : `partial_one_polarity_only(${sawRelayed ? 'relayed' : 'direct'})`
   }
 
   // NC5 — freshness, not presence. A row past its TTL must not read as live. The 5-min
