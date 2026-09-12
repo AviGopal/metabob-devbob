@@ -190,6 +190,7 @@ interface SweepState {
   failing?: Record<string, number> // class -> consecutive QUIESCENT sweeps failing
   clearing?: Record<string, number> // class -> consecutive SOUND sweeps proven clear (closure hysteresis)
   closed?: string[] // classes already written closed, so a close is reported once per transition
+  ownRows?: string[] // this substrate's own registry rows last sweep, for the churn-durability check
 }
 function readState(): SweepState {
   try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')) as SweepState } catch { return {} }
@@ -445,6 +446,50 @@ async function checkForeignVantageReachability() {
     })
   }
   return { vessels, circuitBearing }
+}
+
+// I12 — PEER CHURN MUST NOT DAMAGE THE REGISTRY.
+//
+// The operator requirement this encodes: "it should not be harmful for peers to join and
+// leave the network; and the discovery should be durable across them." A registry that
+// loses its own rows when a foreign peer arrives or departs is worse than one that never
+// federates — the blast radius of joining would exceed the benefit.
+//
+// This is not hypothetical. The hub-mirror de-advertise path diffs last tick's mirrored
+// set against this tick's and DELETEs the difference, and its own comments record two
+// near-misses already guarded (a dropped reservation, and an empty local registry
+// mid-repopulation). A THIRD case is still open by construction: a PARTIAL repopulation
+// returns a non-empty set, passes both guards, and withdraws the rows that have not come
+// back yet. That is self-inflicted rather than cross-inflicted, but it is the same shape.
+//
+// Compared across sweeps rather than asserted in the abstract: this substrate's OWN rows
+// (bare vesselIds — foreign rows carry @substrate) must not shrink. Departures of foreign
+// rows are expected and ignored; the check is specifically that OUR rows survive THEIR
+// churn.
+function checkChurnDurability(prev: SweepState, vessels: any[]): string[] {
+  const own = vessels.filter((v: any) => !String(v.vesselId ?? '').includes('@')).map((v: any) => String(v.vesselId))
+  const before = prev.ownRows ?? []
+  const lost = before.filter((id) => !own.includes(id))
+  const foreign = vessels.filter((v: any) => String(v.vesselId ?? '').includes('@')).length
+
+  if (before.length === 0) {
+    record('I12_churn_non_destructive', 'undecidable', {
+      witness: 'probe', reason: 'no_prior_sweep_baseline',
+      evidence: { own_rows: own.length, foreign_rows: foreign },
+    })
+  } else if (lost.length > 0) {
+    record('I12_churn_non_destructive', 'fail', {
+      witness: 'probe', cls: 'registry_lost_local_rows',
+      evidence: { lost, own_before: before.length, own_now: own.length, foreign_rows: foreign,
+        note: 'rows this substrate owns disappeared between sweeps; a peer joining or leaving must never cost a local row' },
+    })
+  } else {
+    record('I12_churn_non_destructive', 'pass', {
+      witness: 'probe', clears: 'registry_lost_local_rows',
+      evidence: { own_rows: own.length, foreign_rows: foreign, note: 'every local row present last sweep is still present' },
+    })
+  }
+  return own
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════
@@ -1108,6 +1153,7 @@ async function main() {
     // ActiveState=active with Result=success during its up-phase, so an instant snapshot
     // is satisfiable by a unit that is still crash-looping. Closure requires NRestarts
     // and MainPID unchanged across two samples bracketing a full sweep.
+    registry_lost_local_rows: 'across two consecutive sweeps, every registry row this substrate owns (bare vesselId, no @substrate qualifier) that was present in the earlier sweep is still present in the later one, regardless of how many foreign peers joined or left in between.',
     federation_unit_flapping: 'every federation unit (relay, discovery, goal-host) shows NRestarts and MainPID unchanged across two samples bracketing a full sweep, and none sits in `activating` after a non-zero exit.',
     transport_unit_flapping: 'federation-transport-vessel.service shows NRestarts AND MainPID unchanged across two samples bracketing a full sweep interval (an instantaneous ActiveState=active / Result=success does NOT satisfy this — the unit reports exactly that during each up-phase of its crash loop).',
     join_door_host_dependent: 'GET /bootstrap returns a non-empty discovery_endpoint and a non-loopback identity_endpoint when queried under a foreign Host header.',
@@ -1206,6 +1252,7 @@ async function main() {
     // A class that FAILS again leaves the closed set, so its next clear reports as a new
     // transition rather than being suppressed as 'already closed'.
     closed: [...new Set([...alreadyClosed, ...closedGaps])].filter((c) => !stillFailing.has(c)),
+    ownRows: ownRowsNow,
   })
 
   if (JSON_ONLY) {
